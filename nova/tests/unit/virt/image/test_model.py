@@ -60,6 +60,12 @@ class ImageTest(test.NoDBTestCase):
         self.assertEqual(["rbd.example.org"], img.servers)
         self.assertEqual(imgmodel.FORMAT_RAW, img.format)
 
+    def test_sio_image(self):
+        img = imgmodel.SIOImage()
+
+        self.assertIsInstance(img, imgmodel.Image)
+        self.assertEqual(imgmodel.FORMAT_RAW, img.format)
+
     def test_equality(self):
         img1 = imgmodel.LocalFileImage(
             "/var/lib/libvirt/images/demo.qcow2",

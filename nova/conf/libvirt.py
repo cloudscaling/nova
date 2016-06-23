@@ -472,7 +472,7 @@ libvirt version is 1.3.3.
 libvirt_imagebackend_opts = [
     cfg.StrOpt('images_type',
                default='default',
-               choices=('raw', 'flat', 'qcow2', 'lvm', 'rbd', 'ploop',
+               choices=('raw', 'flat', 'qcow2', 'lvm', 'rbd', 'ploop', 'sio',
                         'default'),
                help='VM Images format. If default is specified, then'
                     ' use_cow_images flag is used instead of this one.'),

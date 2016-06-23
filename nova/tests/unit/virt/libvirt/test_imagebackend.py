@@ -1613,7 +1613,7 @@ class PloopTestCase(_ImageTestCase, test.NoDBTestCase):
 
 class BackendTestCase(test.NoDBTestCase):
     INSTANCE = objects.Instance(id=1, uuid=uuidutils.generate_uuid())
-    NAME = 'fake-name.suffix'
+    NAME = 'name.su'
 
     def setUp(self):
         super(BackendTestCase, self).setUp()
@@ -1685,6 +1685,10 @@ class BackendTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(rbd_utils, 'rbd')
         self.mox.StubOutWithMock(rbd_utils, 'rados')
         self._test_image('rbd', imagebackend.Rbd, imagebackend.Rbd)
+
+    @mock.patch('nova.virt.libvirt.imagebackend.sio_utils.SIODriver')
+    def test_image_sio(self, driver):
+        self._test_image('sio', imagebackend.Sio, imagebackend.Sio)
 
     def test_image_default(self):
         self._test_image('default', imagebackend.Flat, imagebackend.Qcow2)

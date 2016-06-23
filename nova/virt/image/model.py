@@ -129,3 +129,13 @@ class RBDImage(Image):
         self.user = user
         self.password = password
         self.servers = servers
+
+
+class SIOImage(Image):
+    """Class for images that are volumes on a remote
+    ScaleIO server
+    """
+
+    def __init__(self):
+        """Create a new SIO image object"""
+        super(SIOImage, self).__init__(FORMAT_RAW)

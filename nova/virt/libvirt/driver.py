@@ -106,6 +106,7 @@ from nova.virt.libvirt import migration as libvirt_migrate
 from nova.virt.libvirt.storage import dmcrypt
 from nova.virt.libvirt.storage import lvm
 from nova.virt.libvirt.storage import rbd_utils
+from nova.virt.libvirt.storage import sio_utils
 from nova.virt.libvirt import utils as libvirt_utils
 from nova.virt.libvirt import vif as libvirt_vif
 from nova.virt.libvirt.volume import remotefs
@@ -940,6 +941,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 self._cleanup_lvm(instance, block_device_info)
             if CONF.libvirt.images_type == 'rbd':
                 self._cleanup_rbd(instance)
+        if CONF.libvirt.images_type == 'sio':
+            self._cleanup_sio(instance, destroy_disks)
 
         is_shared_block_storage = False
         if migrate_data and 'is_shared_block_storage' in migrate_data:
@@ -993,6 +996,15 @@ class LibvirtDriver(driver.ComputeDriver):
                 ceph_conf=CONF.libvirt.images_rbd_ceph_conf,
                 rbd_user=CONF.libvirt.rbd_user)
 
+    @staticmethod
+    def _get_sio_driver():
+        # TODO(emc): Currently we assume a static ScaleIO protection domain and
+        # storage pool. In the future we will need to have the API library
+        # determine what protection domain and storage pool to use based on
+        # the compute host node information. For now if defined use values
+        # present in conf file
+        return sio_utils.SIODriver()
+
     def _cleanup_rbd(self, instance):
         LibvirtDriver._get_rbd_driver().cleanup_volumes(instance)
 
@@ -1025,6 +1037,10 @@ class LibvirtDriver(driver.ComputeDriver):
             disks = map(fullpath, disk_names)
             return disks
         return []
+
+    def _cleanup_sio(self, instance, destroy_disks):
+        LibvirtDriver._get_sio_driver().cleanup_volumes(
+            instance, unmap_only=not destroy_disks)
 
     def get_volume_connector(self, instance):
         root_helper = utils.get_root_helper()
@@ -1060,6 +1076,7 @@ class LibvirtDriver(driver.ComputeDriver):
             self._undefine_domain(instance)
             self.unplug_vifs(instance, network_info)
             self.unfilter_instance(instance, network_info)
+            self.image_backend.backend().disconnect_disks(instance)
 
     def _get_volume_driver(self, connection_info):
         driver_type = connection_info.get('driver_volume_type')
@@ -1414,7 +1431,7 @@ class LibvirtDriver(driver.ComputeDriver):
         image_format = CONF.libvirt.snapshot_image_format or source_type
 
         # NOTE(bfilippov): save lvm and rbd as raw
-        if image_format == 'lvm' or image_format == 'rbd':
+        if image_format in ('lvm', 'rbd', 'sio'):
             image_format = 'raw'
 
         metadata = self._create_snapshot_metadata(instance.image_meta,
@@ -1432,7 +1449,7 @@ class LibvirtDriver(driver.ComputeDriver):
         #               It is necessary in case this situation changes in the
         #               future.
         if (self._host.has_min_version(hv_type=host.HV_DRIVER_QEMU)
-             and source_type not in ('lvm')
+             and source_type not in ('lvm', 'sio')
              and not CONF.ephemeral_storage_encryption.enabled
              and not CONF.workarounds.disable_libvirt_livesnapshot):
             live_snapshot = True
@@ -4894,6 +4911,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                CONF.libvirt.images_volume_group)
         elif CONF.libvirt.images_type == 'rbd':
             info = LibvirtDriver._get_rbd_driver().get_pool_info()
+        elif CONF.libvirt.images_type == 'sio':
+            info = LibvirtDriver._get_sio_driver().get_pool_info()
         else:
             info = libvirt_utils.get_fs_info(CONF.instances_path)
 
@@ -5521,7 +5540,6 @@ class LibvirtDriver(driver.ComputeDriver):
         if (dest_check_data.obj_attr_is_set('image_type') and
                 CONF.libvirt.images_type == dest_check_data.image_type and
                 self.image_backend.backend().is_shared_block_storage()):
-            # NOTE(dgenin): currently true only for RBD image backend
             return True
 
         if (dest_check_data.is_shared_instance_path and
@@ -6407,7 +6425,9 @@ class LibvirtDriver(driver.ComputeDriver):
                 libvirt_utils.write_to_file(image_disk_info_path,
                                             jsonutils.dumps(image_disk_info))
 
-            if not is_shared_block_storage:
+            if is_shared_block_storage:
+                self.image_backend.backend().connect_disks(instance)
+            else:
                 # Ensure images and backing files are present.
                 LOG.debug('Checking to make sure images and backing files are '
                           'present before live migration.', instance=instance)
@@ -6690,6 +6710,10 @@ class LibvirtDriver(driver.ComputeDriver):
             disk_dev = vol['mount_device'].rpartition("/")[2]
             volume_devices.add(disk_dev)
 
+        no_block_devices = (
+            block_device_info is not None and
+            self.image_backend.backend().is_shared_block_storage())
+
         disk_info = []
         doc = etree.fromstring(xml)
 
@@ -6728,6 +6752,11 @@ class LibvirtDriver(driver.ComputeDriver):
             if target in volume_devices:
                 LOG.debug('skipping disk %(path)s (%(target)s) as it is a '
                           'volume', {'path': path, 'target': target})
+                continue
+
+            if no_block_devices and disk_type == 'block':
+                LOG.debug('skipping disk %(path)s as it may belong to '
+                          'used shared block storage')
                 continue
 
             # get the real disk size or
@@ -6951,8 +6980,11 @@ class LibvirtDriver(driver.ComputeDriver):
         ephemeral_down = flavor.ephemeral_gb < eph_size
         disk_info_text = self.get_instance_disk_info(
             instance, block_device_info=block_device_info)
-        booted_from_volume = self._is_booted_from_volume(instance,
-                                                         disk_info_text)
+        block_device_mapping = driver.block_device_info_get_mapping(
+                                                        block_device_info)
+        root_disk = block_device.get_root_bdm(block_device_mapping)
+        booted_from_volume = (
+            self._is_booted_from_volume(instance, disk_info_text) and root_disk)
         if (root_down and not booted_from_volume) or ephemeral_down:
             reason = _("Unable to resize disk down.")
             raise exception.InstanceFaultRollback(
@@ -6986,8 +7018,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         self.power_off(instance, timeout, retry_interval)
 
-        block_device_mapping = driver.block_device_info_get_mapping(
-            block_device_info)
         for vol in block_device_mapping:
             connection_info = vol['connection_info']
             disk_dev = vol['mount_device'].rpartition("/")[2]

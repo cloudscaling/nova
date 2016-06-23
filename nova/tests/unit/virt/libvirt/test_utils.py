@@ -72,6 +72,11 @@ class LibvirtUtilsTestCase(test.NoDBTestCase):
         d_type = libvirt_utils.get_disk_type_from_path('rbd:pool/instance')
         self.assertEqual('rbd', d_type)
 
+        # Try sio detection
+        d_type = libvirt_utils.get_disk_type_from_path(
+            '/dev/disk/by-id/emc-vol-101884a5027f35c3-bf733bc400000001')
+        self.assertEqual('sio', d_type)
+
         # Try the other types
         path = '/myhome/disk.config'
         d_type = libvirt_utils.get_disk_type_from_path(path)

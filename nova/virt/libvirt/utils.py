@@ -383,7 +383,9 @@ def find_disk(virt_dom):
 
 
 def get_disk_type_from_path(path):
-    """Retrieve disk type (raw, qcow2, lvm, ploop) for given file."""
+    """Retrieve disk type (raw, qcow2, lvm, ploop, etc) for given file."""
+    if path.startswith('/dev/disk/by-id/emc-vol'):
+        return 'sio'
     if path.startswith('/dev'):
         return 'lvm'
     elif path.startswith('rbd:'):

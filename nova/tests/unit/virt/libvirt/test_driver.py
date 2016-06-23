@@ -106,6 +106,7 @@ from nova.virt.libvirt import migration as libvirt_migrate
 from nova.virt.libvirt.storage import dmcrypt
 from nova.virt.libvirt.storage import lvm
 from nova.virt.libvirt.storage import rbd_utils
+from nova.virt.libvirt.storage import sio_utils
 from nova.virt.libvirt import utils as libvirt_utils
 from nova.virt.libvirt.volume import volume as volume_drivers
 
@@ -9565,6 +9566,15 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                              'disk_available_mb': 123,
                              'image_type': 'qcow2',
                              'block_migration': False},
+                            {'is_shared_block_storage': True,
+                             'is_shared_instance_path': False,
+                             'is_volume_backed': False,
+                             'filename': 'foo',
+                             'instance_relative_path': 'bar',
+                             'disk_over_commit': False,
+                             'disk_available_mb': 123,
+                             'image_type': 'qcow2',
+                             'block_migration': False},
                             {'is_shared_block_storage': False,
                              'is_shared_instance_path': True,
                              'is_volume_backed': False,
@@ -9603,6 +9613,44 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                 self.assertFalse(create_image_mock.called)
                 self.assertIsInstance(res,
                                       objects.LibvirtLiveMigrateData)
+
+    def test_pre_live_migration_disks_connected(self):
+        migrate_data = {'is_shared_block_storage': True,
+                        'is_shared_instance_path': False,
+                        'instance_relative_path': 'bar',
+                        'block_migration': False}
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        instance = objects.Instance(**self.test_instance)
+        # creating mocks
+        with test.nested(
+            mock.patch.object(imagebackend.Image, 'connect_disks'),
+            mock.patch.object(drvr,
+                              'ensure_filtering_rules_for_instance'),
+            mock.patch.object(drvr, 'plug_vifs'),
+        ) as (
+            connect_disks_mock,
+            rules_mock,
+            plug_mock,
+        ):
+            disk_info_json = jsonutils.dumps({})
+            res = drvr.pre_live_migration(self.context, instance,
+                                          block_device_info=None,
+                                          network_info=[],
+                                          disk_info=disk_info_json,
+                                          migrate_data=migrate_data)
+            connect_disks_mock.assert_called_once_with(instance)
+            self.assertIsInstance(res, objects.LibvirtLiveMigrateData)
+            connect_disks_mock.reset_mock()
+
+            migrate_data['is_shared_block_storage'] = False
+            migrate_data['instance_relative_path'] = 'foo'
+            res = drvr.pre_live_migration(self.context, instance,
+                                          block_device_info=None,
+                                          network_info=[],
+                                          disk_info=disk_info_json,
+                                          migrate_data=migrate_data)
+            self.assertFalse(connect_disks_mock.called)
 
     def test_pre_live_migration_with_not_shared_instance_path(self):
         migrate_data = migrate_data_obj.LibvirtLiveMigrateData(
@@ -9919,6 +9967,42 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         self.assertEqual(info[0]['disk_size'], 10737418240)
         self.assertEqual(info[0]['backing_file'], "")
         self.assertEqual(info[0]['over_committed_disk_size'], 0)
+
+    def test_get_instance_disk_info_shared_block_storage(self):
+        self.flags(images_type='sio', group='libvirt')
+
+        instance = objects.Instance(**self.test_instance)
+        dummyxml = ("<domain type='kvm'><name>instance-0000000a</name>"
+                    "<devices>"
+                    "<disk type='block'><driver name='qemu' type='raw'/>"
+                    "<source file='/fake/path/to/volume1'/>"
+                    "<target dev='vda' bus='virtio'/></disk>"
+                    "<disk type='file'><driver name='qemu' type='raw'/>"
+                    "<source file='/test/disk'/>"
+                    "<target dev='vdb' bus='virtio'/></disk>"
+                    "</devices></domain>")
+
+        # Preparing mocks
+        vdmock = self.mox.CreateMock(fakelibvirt.virDomain)
+        self.mox.StubOutWithMock(vdmock, "XMLDesc")
+        vdmock.XMLDesc(flags=0).AndReturn(dummyxml)
+
+        def fake_lookup(instance_name):
+            if instance_name == instance.name:
+                return vdmock
+        self.create_fake_libvirt_mock(lookupByName=fake_lookup)
+
+        self.mox.StubOutWithMock(os.path, "getsize")
+        os.path.getsize('/test/disk').AndReturn((10737418240))
+
+        self.mox.ReplayAll()
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        info = drvr.get_instance_disk_info(instance, block_device_info={})
+
+        info = jsonutils.loads(info)
+        self.assertEqual(1, len(info))
+        self.assertEqual(info[0]['type'], 'raw')
+        self.assertEqual(info[0]['path'], '/test/disk')
 
     def test_spawn_with_network_info(self):
         # Preparing mocks
@@ -15862,6 +15946,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
             mock_undef.assert_called_once_with(ins_ref)
             mock_unplug.assert_called_once_with(ins_ref, fake_net)
             mock_unfilter.assert_called_once_with(ins_ref, fake_net)
+            (drvr.image_backend.backend.return_value.disconnect_disks.
+             assert_called_once_with(ins_ref))
 
     def test_cleanup_resize_snap_backend(self):
         CONF.set_override('policy_dirs', [], group='oslo_policy')
@@ -16774,6 +16860,28 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
 
     def test_cleanup_encrypted_lvm(self):
         self._test_cleanup_lvm(encrypted=True)
+
+    @mock.patch('nova.virt.libvirt.storage.sio_utils.SIODriver')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.unfilter_instance')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._undefine_domain')
+    @mock.patch.object(objects.Instance, 'save')
+    def test_cleanup_sio(self, mock_save, mock_undefine_domain, mock_unfilter,
+                         driver):
+        self.flags(images_type="sio",
+                   group='libvirt')
+        drv = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        instance = self._create_instance()
+
+        drv.cleanup(context, instance, 'fake_network', destroy_vifs=False,
+                    destroy_disks=True)
+        driver.return_value.cleanup_volumes.assert_called_once_with(
+            instance, unmap_only=False)
+        driver.reset_mock()
+
+        drv.cleanup(context, instance, 'fake_network', destroy_vifs=False,
+                    destroy_disks=False)
+        driver.return_value.cleanup_volumes.assert_called_once_with(
+            instance, unmap_only=True)
 
     def test_vcpu_model_to_config(self):
         drv = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
@@ -18131,6 +18239,16 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
                 driver.snapshot(self.context, self.instance_ref,
                                 recv_meta['id'], self.mock_update_task_state)
                 self.assertTrue(mock_suspend.called)
+
+    @mock.patch.object(fake_libvirt_utils, 'disk_type', new='sio')
+    @mock.patch.object(sio_utils, 'SIODriver')
+    def test_sio(self, driver):
+        self.flags(images_type='sio', group='libvirt')
+        driver.return_value.export_image.side_effect = (
+            lambda source, dest, out_format:
+                _fake_convert_image(source, dest, None, out_format))
+
+        self._test_snapshot(disk_format='raw')
 
 
 class LXCSnapshotTests(LibvirtSnapshotTests):

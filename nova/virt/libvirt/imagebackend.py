@@ -42,6 +42,7 @@ from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt.storage import dmcrypt
 from nova.virt.libvirt.storage import lvm
 from nova.virt.libvirt.storage import rbd_utils
+from nova.virt.libvirt.storage import sio_utils
 from nova.virt.libvirt import utils as libvirt_utils
 
 CONF = nova.conf.CONF
@@ -188,6 +189,9 @@ class Image(object):
     def exists(self):
         return os.path.exists(self.path)
 
+    def local_exists(self):
+        return self.exists(self)
+
     def cache(self, fetch_func, filename, size=None, *args, **kwargs):
         """Creates image from template.
 
@@ -213,7 +217,7 @@ class Image(object):
             fileutils.ensure_tree(base_dir)
         base = os.path.join(base_dir, filename)
 
-        if not self.exists() or not os.path.exists(base):
+        if not self.local_exists() or not os.path.exists(base):
             self.create_image(fetch_func_sync, base, size,
                               *args, **kwargs)
 
@@ -431,6 +435,24 @@ class Image(object):
         don't support snapshots.
 
         :param name: name of the snapshot
+        """
+        pass
+
+    @staticmethod
+    def connect_disks(instance):
+        """Connect existing instance disks to the compute host.
+
+        Makes existing instance disks available to use with libvirt.
+
+        :param instance: instance object
+        """
+        pass
+
+    @staticmethod
+    def disconnect_disks(instance):
+        """Disconnect instance disks from the compute host.
+
+        :param instance: instance object
         """
         pass
 
@@ -1073,6 +1095,109 @@ class Ploop(Image):
                                        out_format)
 
 
+class Sio(Image):
+
+    def __init__(self, instance=None, disk_name=None, path=None):
+        # is_block_dev is False because True prevents ephemerals to be
+        # formatted and mounted due to a bug with creating of disk template
+        # in create_image call path
+        super(Sio, self).__init__("block", "raw", is_block_dev=False)
+
+        # TODO(emc): Currently we assume a static ScaleIO protection domain
+        # and storage pool. In the future we will need to have the API library
+        # determine what protection domain and storage pool to use based on
+        # the compute host node  information. For now if defined use values
+        # present in conf file
+        self.driver = sio_utils.SIODriver()
+
+        if path:
+            vol_id = path.split('-')[-1]
+            self.volume_name = self.driver.get_volume_name(vol_id)
+            self.path = path
+        else:
+            self.volume_name = sio_utils.get_sio_volume_name(instance,
+                                                             disk_name)
+            if self.driver.check_volume_exists(self.volume_name):
+                self.path = self.driver.get_volume_path(self.volume_name)
+            else:
+                self.path = None
+
+    @staticmethod
+    def is_shared_block_storage():
+        return True
+
+    @staticmethod
+    def connect_disks(instance):
+        sio_utils.SIODriver().map_volumes(instance)
+
+    @staticmethod
+    def disconnect_disks(instance):
+        sio_utils.SIODriver().cleanup_volumes(instance, unmap_only=True)
+
+    def exists(self):
+        return self.driver.check_volume_exists(self.volume_name)
+
+    def local_exists(self):
+        return bool(self.path)
+
+    def create_image(self, prepare_template, base, size, *args, **kwargs):
+        if self.driver.check_volume_exists(self.volume_name):
+            self.path = self.driver.map_volume(self.volume_name)
+        else:
+            if not os.path.exists(base):
+                prepare_template(target=base, max_size=size, *args, **kwargs)
+
+            sio_utils.verify_volume_size(size)
+            base_size = disk.get_disk_size(base)
+            self.verify_base_size(base, size, base_size=base_size)
+
+            self.driver.create_volume(self.volume_name, size)
+            self.path = self.driver.map_volume(self.volume_name)
+            self.driver.import_image(base, self.path)
+
+    def get_disk_size(self, name):
+        return self.driver.get_volume_size(self.volume_name)
+
+    def get_model(self, connection):
+        return imgmodel.SIOImage()
+
+    def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
+                     extra_specs, hypervisor_version):
+        if self.path is None:
+            raise exception.NovaException(
+                _('Disk volume %s is not connected') % self.volume_name)
+
+        info = super(Sio, self).libvirt_info(
+            disk_bus, disk_dev, device_type, cache_mode,
+            extra_specs, hypervisor_version)
+
+        # set is_block_dev to select proper backend driver,
+        # because ScaleIO volumes are block devices in fact
+        info.driver_name = libvirt_utils.pick_disk_driver_name(
+            hypervisor_version, is_block_dev=True)
+
+        return info
+
+    def snapshot_extract(self, target, out_format):
+        self.driver.export_image(self.path, target, out_format)
+
+    def resize_image(self, size):
+        sio_utils.verify_volume_size(size)
+        self.driver.extend_volume(self.volume_name, size)
+
+    def create_snap(self, name):
+        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
+        self.driver.snapshot_volume(self.volume_name, snap_name)
+
+    def remove_snap(self, name, ignore_errors=False):
+        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
+        self.driver.remove_volume(snap_name)
+
+    def rollback_to_snap(self, name):
+        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
+        self.driver.rollback_to_snapshot(self.volume_name, snap_name)
+
+
 class Backend(object):
     def __init__(self, use_cow):
         self.BACKEND = {
@@ -1082,6 +1207,7 @@ class Backend(object):
             'lvm': Lvm,
             'rbd': Rbd,
             'ploop': Ploop,
+            'sio': Sio,
             'default': Qcow2 if use_cow else Flat
         }
 
