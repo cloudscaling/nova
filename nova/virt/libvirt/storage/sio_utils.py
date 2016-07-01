@@ -19,6 +19,7 @@ import binascii
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_utils import excutils
 from oslo_utils import units
 import six
 
@@ -38,6 +39,11 @@ CONF = cfg.CONF
 
 VOLSIZE_MULTIPLE_GB = 8
 MAX_VOL_NAME_LENGTH = 31
+PROTECTION_DOMAIN_KEY = 'sio:pd_name'
+STORAGE_POOL_KEY = 'sio:sp_name'
+PROVISIONING_TYPE_KEY = 'sio:provisioning_type'
+PROVISIONING_TYPES_MAP = {'thin': 'ThinProvisioned',
+                          'thick': 'ThickProvisioned'}
 
 
 def verify_volume_size(requested_size):
@@ -126,8 +132,6 @@ class SIODriver(object):
     def __init__(self):
         """Initialize ScaleIODriver object.
 
-        :param domain_name: ScaleIO protection domain name
-        :param pool_name:  ScaleIO storage pool name
         :return: Nothing
         """
         if siolib is None:
@@ -151,17 +155,24 @@ class SIODriver(object):
                 'free': free_bytes,
                 'used': used_bytes}
 
-    def create_volume(self, name, size):
+    def create_volume(self, name, size, extra_specs):
         """Create a ScaleIO volume.
 
         :param name: Volume name to use
         :param size: Size of volume to create
+        :param extra_specs: A dict of instance flavor extra specs
         :return: Nothing
         """
-        self.ioctx.create_volume(name,
-                                 CONF.scaleio.protection_domain_name,
-                                 CONF.scaleio.storage_pool_name,
-                                 CONF.scaleio.provisioning_type,
+        pd_name = extra_specs.get(PROTECTION_DOMAIN_KEY,
+                                  CONF.scaleio.protection_domain_name
+                                  ).encode('utf8')
+        sp_name = extra_specs.get(STORAGE_POOL_KEY,
+                                  CONF.scaleio.storage_pool_name
+                                  ).encode('utf8')
+        ptype = extra_specs.get(PROVISIONING_TYPE_KEY,
+                                CONF.scaleio.provisioning_type)
+        ptype = PROVISIONING_TYPES_MAP.get(ptype, ptype)
+        self.ioctx.create_volume(name, pd_name, sp_name, ptype,
                                  size / units.Gi)
 
     def remove_volume(self, name, ignore_mappings=False):
@@ -288,6 +299,51 @@ class SIODriver(object):
         :return: Nothing
         """
         self.ioctx.extend_volume(name, new_size / units.Gi)
+
+    def move_volume(self, name, extra_specs, orig_extra_specs):
+        """Move a volume to another protection domain or storage pool.
+
+        :param name: String ScaleIO volume name to extend
+        :param extra_specs: A dict of instance flavor extra specs
+        :param orig_extra_specs: A dict of original instance flavor extra specs
+        :return: Nothing
+        """
+
+        if (extra_specs.get(PROTECTION_DOMAIN_KEY) ==
+                orig_extra_specs.get(PROTECTION_DOMAIN_KEY) and
+                extra_specs.get(STORAGE_POOL_KEY) ==
+                orig_extra_specs.get(STORAGE_POOL_KEY)):
+            return
+        size = self.get_volume_size(name)
+        tmp_name = name + '/#'
+        self.create_volume(tmp_name, size, extra_specs)
+        try:
+            new_path = self.map_volume(tmp_name)
+            vol_id = self.get_volume_id(name)
+            old_path = self.ioctx.get_volumepath(vol_id)
+            if old_path:
+                mapped = True
+            else:
+                mapped = False
+                self.ioctx.attach_volume(vol_id)
+                old_path = self.ioctx.get_volumepath(vol_id)
+                if not old_path:
+                    raise RuntimeError(
+                        _('Failed to attach disk volume %s') % name)
+            utils.execute('dd',
+                          'if=%s' % old_path,
+                          'of=%s' % new_path,
+                          'bs=1M',
+                          'iflag=direct',
+                          run_as_root=True)
+            self.remove_volume(name, ignore_mappings=True)
+            if not mapped:
+                self.unmap_volume(tmp_name)
+            new_id = self.get_volume_id(tmp_name)
+            self.ioctx.rename_volume(new_id, name)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                self.remove_volume(tmp_name, ignore_mappings=True)
 
     def snapshot_volume(self, name, snapshot_name):
         """Snapshot a volume.

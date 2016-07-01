@@ -998,11 +998,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
     @staticmethod
     def _get_sio_driver():
-        # TODO(emc): Currently we assume a static ScaleIO protection domain and
-        # storage pool. In the future we will need to have the API library
-        # determine what protection domain and storage pool to use based on
-        # the compute host node information. For now if defined use values
-        # present in conf file
         return sio_utils.SIODriver()
 
     def _cleanup_rbd(self, instance):

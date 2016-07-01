@@ -28,6 +28,7 @@ from oslo_utils import strutils
 from oslo_utils import units
 import six
 
+from nova.compute import task_states
 import nova.conf
 from nova import exception
 from nova.i18n import _
@@ -189,9 +190,6 @@ class Image(object):
     def exists(self):
         return os.path.exists(self.path)
 
-    def local_exists(self):
-        return self.exists(self)
-
     def cache(self, fetch_func, filename, size=None, *args, **kwargs):
         """Creates image from template.
 
@@ -217,9 +215,11 @@ class Image(object):
             fileutils.ensure_tree(base_dir)
         base = os.path.join(base_dir, filename)
 
-        if not self.local_exists() or not os.path.exists(base):
+        if not self.exists() or not os.path.exists(base):
             self.create_image(fetch_func_sync, base, size,
                               *args, **kwargs)
+        else:
+            self.connect_disk()
 
         if size:
             if size > self.get_disk_size(base):
@@ -435,6 +435,13 @@ class Image(object):
         don't support snapshots.
 
         :param name: name of the snapshot
+        """
+        pass
+
+    def connect_disk(self):
+        """Connect existing disk to the compute host.
+
+        Makes existing instance disk available to use with libvirt.
         """
         pass
 
@@ -1103,11 +1110,11 @@ class Sio(Image):
         # in create_image call path
         super(Sio, self).__init__("block", "raw", is_block_dev=False)
 
-        # TODO(emc): Currently we assume a static ScaleIO protection domain
-        # and storage pool. In the future we will need to have the API library
-        # determine what protection domain and storage pool to use based on
-        # the compute host node  information. For now if defined use values
-        # present in conf file
+        self.extra_specs = instance.flavor.extra_specs
+        if (instance.task_state == task_states.RESIZE_FINISH):
+            self.orig_extra_specs = instance.get_flavor('old').extra_specs
+        else:
+            self.orig_extra_specs = None
         self.driver = sio_utils.SIODriver()
 
         if path:
@@ -1137,9 +1144,6 @@ class Sio(Image):
     def exists(self):
         return self.driver.check_volume_exists(self.volume_name)
 
-    def local_exists(self):
-        return bool(self.path)
-
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         if self.driver.check_volume_exists(self.volume_name):
             self.path = self.driver.map_volume(self.volume_name)
@@ -1151,9 +1155,15 @@ class Sio(Image):
             base_size = disk.get_disk_size(base)
             self.verify_base_size(base, size, base_size=base_size)
 
-            self.driver.create_volume(self.volume_name, size)
+            self.driver.create_volume(self.volume_name, size, self.extra_specs)
             self.path = self.driver.map_volume(self.volume_name)
             self.driver.import_image(base, self.path)
+
+    def connect_disk(self):
+        self.path = self.driver.map_volume(self.volume_name)
+        if self.orig_extra_specs is not None:
+            self.driver.move_volume(self.volume_name, self.extra_specs,
+                                      self.orig_extra_specs)
 
     def get_disk_size(self, name):
         return self.driver.get_volume_size(self.volume_name)
