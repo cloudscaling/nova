@@ -104,7 +104,7 @@ def probe_partitions(device_path, run_as_root=False):
         LOG.debug("Probing the device partitions has failed. (%s)", exc)
 
 
-def _uuid_to_base64(self, uuid):
+def _uuid_to_base64(uuid):
     # This function is copied from Cinder's ScaleIO volume driver
     name = six.text_type(uuid).replace("-", "")
     try:
