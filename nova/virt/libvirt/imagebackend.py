@@ -1105,10 +1105,6 @@ class Ploop(Image):
 class Sio(Image):
 
     def __init__(self, instance=None, disk_name=None, path=None):
-        # is_block_dev is False because True prevents ephemerals to be
-        # formatted and mounted due to a bug with creating of disk template
-        # in create_image call path
-        super(Sio, self).__init__("block", "raw", is_block_dev=False)
 
         self.extra_specs = instance.flavor.extra_specs
         if (instance.task_state == task_states.RESIZE_FINISH):
@@ -1120,14 +1116,18 @@ class Sio(Image):
         if path:
             vol_id = path.split('-')[-1]
             self.volume_name = self.driver.get_volume_name(vol_id)
-            self.path = path
         else:
             self.volume_name = sio_utils.get_sio_volume_name(instance,
                                                              disk_name)
             if self.driver.check_volume_exists(self.volume_name):
-                self.path = self.driver.get_volume_path(self.volume_name)
+                path = self.driver.get_volume_path(self.volume_name)
             else:
-                self.path = None
+                path = None
+
+        # is_block_dev is False because True prevents ephemerals to be
+        # formatted and mounted due to a bug with creating of disk template
+        # in create_image call path
+        super(Sio, self).__init__(path, "block", "raw", is_block_dev=False)
 
     @staticmethod
     def is_shared_block_storage():
@@ -1149,7 +1149,7 @@ class Sio(Image):
             self.path = self.driver.map_volume(self.volume_name)
         else:
             if not os.path.exists(base):
-                prepare_template(target=base, max_size=size, *args, **kwargs)
+                prepare_template(target=base, *args, **kwargs)
 
             sio_utils.verify_volume_size(size)
             base_size = disk.get_disk_size(base)
