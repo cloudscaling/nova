@@ -1146,7 +1146,7 @@ class Sio(Image):
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         if self.driver.check_volume_exists(self.volume_name):
-            self.path = self.driver.map_volume(self.volume_name)
+            self.connect_disk()
         else:
             if not os.path.exists(base):
                 prepare_template(target=base, *args, **kwargs)
