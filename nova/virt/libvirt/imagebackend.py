@@ -1141,6 +1141,9 @@ class Sio(Image):
     def disconnect_disks(instance):
         sio_utils.SIODriver().cleanup_volumes(instance, unmap_only=True)
 
+    def is_rescuer(self):
+        return sio_utils.is_sio_volume_rescuer(self.volume_name)
+
     def exists(self):
         return self.driver.check_volume_exists(self.volume_name)
 
@@ -1151,9 +1154,14 @@ class Sio(Image):
             if not os.path.exists(base):
                 prepare_template(target=base, *args, **kwargs)
 
-            sio_utils.verify_volume_size(size)
             base_size = disk.get_disk_size(base)
-            self.verify_base_size(base, size, base_size=base_size)
+            if size is None and self.is_rescuer():
+                size = sio_utils.choose_volume_size(base_size)
+                self.extra_specs = dict(self.extra_specs)
+                self.extra_specs[sio_utils.PROVISIONING_TYPE_KEY] = 'thin'
+            else:
+                sio_utils.verify_volume_size(size)
+                self.verify_base_size(base, size, base_size=base_size)
 
             self.driver.create_volume(self.volume_name, size, self.extra_specs)
             self.path = self.driver.map_volume(self.volume_name)

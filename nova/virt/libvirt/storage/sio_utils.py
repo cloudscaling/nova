@@ -63,6 +63,16 @@ def verify_volume_size(requested_size):
              requested_size))
 
 
+def choose_volume_size(requested_size):
+    """Choose ScaleIO volume size to fit requested size.
+
+    ScaleIO creates volumes in multiples of 8.
+    :param requested_size: Size in bytes
+    :return: The smallest allowed size in bytes of ScaleIO volume.
+    """
+    return -(-requested_size / (units.Gi * VOLSIZE_MULTIPLE_GB)) * units.Gi
+
+
 def get_sio_volume_name(instance, disk_name):
     """Generate ScaleIO volume name for instance disk.
 
@@ -94,6 +104,9 @@ def get_sio_snapshot_name(volume_name, snapshot_name):
                            snapshot_name)
     return sio_name
 
+
+def is_sio_volume_rescuer(volume_name):
+    return volume_name.endswith('rescue')
 
 def probe_partitions(device_path, run_as_root=False):
     """Method called to trigger OS and inform the OS of partition table changes
@@ -393,3 +406,14 @@ class SIODriver(object):
                 self.unmap_volume(volume)
             else:
                 self.remove_volume(volume, ignore_mappings=True)
+
+    def cleanup_rescue_volumes(self, instance):
+        """Cleanup instance volumes used in rescue mode.
+
+        :param instance: Instance object
+        :return: Nothing
+        """
+        # NOTE(ft): We assume that only root disk is recreated in rescue mode.
+        # With this assumption the code becomes more simple and fast.
+        rescue_name = _uuid_to_base64(instance.uuid) + 'rescue'
+        self.remove_volume(rescue_name, ignore_mappings=True)

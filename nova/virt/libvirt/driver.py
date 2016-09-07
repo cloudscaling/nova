@@ -2558,6 +2558,8 @@ class LibvirtDriver(driver.ComputeDriver):
         # cleanup rescue volume
         lvm.remove_volumes([lvmdisk for lvmdisk in self._lvm_disks(instance)
                                 if lvmdisk.endswith('.rescue')])
+        if CONF.libvirt.images_type == 'sio':
+            LibvirtDriver._get_sio_driver().cleanup_rescue_volumes(instance)
 
     def poll_rebooting_instances(self, timeout, instances):
         pass
