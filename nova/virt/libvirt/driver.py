@@ -2813,10 +2813,11 @@ class LibvirtDriver(driver.ComputeDriver):
                       specified_fs=specified_fs)
 
     @staticmethod
-    def _create_swap(target, swap_mb, context=None):
+    def _create_swap(target, swap_mb, is_block_dev=False, context=None):
         """Create a swap file of specified size."""
-        libvirt_utils.create_image('raw', target, '%dM' % swap_mb)
-        utils.mkfs('swap', target)
+        if not is_block_dev:
+            libvirt_utils.create_image('raw', target, '%dM' % swap_mb)
+        utils.mkfs('swap', target, run_as_root=is_block_dev)
 
     @staticmethod
     def _get_console_log_path(instance):

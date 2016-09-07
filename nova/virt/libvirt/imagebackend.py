@@ -202,18 +202,18 @@ class Image(object):
         :filename: Name of the file in the image directory
         :size: Size of created image in bytes (optional)
         """
-        @utils.synchronized(filename, external=True, lock_path=self.lock_path)
-        def fetch_func_sync(target, *args, **kwargs):
-            # The image may have been fetched while a subsequent
-            # call was waiting to obtain the lock.
-            if not os.path.exists(target):
-                fetch_func(target=target, *args, **kwargs)
-
         base_dir = os.path.join(CONF.instances_path,
                                 CONF.image_cache_subdirectory_name)
         if not os.path.exists(base_dir):
             fileutils.ensure_tree(base_dir)
         base = os.path.join(base_dir, filename)
+
+        @utils.synchronized(filename, external=True, lock_path=self.lock_path)
+        def fetch_func_sync(target, *args, **kwargs):
+            # The image may have been fetched while a subsequent
+            # call was waiting to obtain the lock.
+            if target != base or not os.path.exists(target):
+                fetch_func(target=target, *args, **kwargs)
 
         if not self.exists() or not os.path.exists(base):
             self.create_image(fetch_func_sync, base, size,
@@ -1124,10 +1124,7 @@ class Sio(Image):
             else:
                 path = None
 
-        # is_block_dev is False because True prevents ephemerals to be
-        # formatted and mounted due to a bug with creating of disk template
-        # in create_image call path
-        super(Sio, self).__init__(path, "block", "raw", is_block_dev=False)
+        super(Sio, self).__init__(path, "block", "raw", is_block_dev=True)
 
     @staticmethod
     def is_shared_block_storage():
@@ -1150,6 +1147,17 @@ class Sio(Image):
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         if self.driver.check_volume_exists(self.volume_name):
             self.connect_disk()
+            return
+
+        generating = 'image_id' not in kwargs
+        # NOTE(ft): We assume that only root disk is recreated in rescue mode.
+        # With this assumption the code becomes more simple and fast.
+        if generating:
+            sio_utils.verify_volume_size(size)
+            self.driver.create_volume(self.volume_name, size, self.extra_specs)
+            self.path = self.driver.map_volume(self.volume_name)
+            prepare_template(target=self.path, is_block_dev=True,
+                             *args, **kwargs)
         else:
             if not os.path.exists(base):
                 prepare_template(target=base, *args, **kwargs)
