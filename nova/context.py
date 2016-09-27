@@ -248,8 +248,8 @@ class RequestContext(context.RequestContext):
 
         return context
 
-    def can(self, rule, target=None, fatal=True):
-        """Verifies that the given rule is valid on the target in this context.
+    def can(self, action, target=None, fatal=True):
+        """Verifies that the given action is valid on the target in this context.
 
         :param action: string representing the action to be checked.
         :param target: dictionary representing the object of the action
@@ -271,11 +271,16 @@ class RequestContext(context.RequestContext):
                       'user_id': self.user_id}
 
         try:
-            return policy.authorize(self, rule, target)
+            return policy.authorize(self, action, target)
         except exception.Forbidden:
             if fatal:
                 raise
             return False
+
+    def to_policy_values(self):
+        policy = super(RequestContext, self).to_policy_values()
+        policy['is_admin'] = self.is_admin
+        return policy
 
     def __str__(self):
         return "<Context %s>" % self.to_dict()

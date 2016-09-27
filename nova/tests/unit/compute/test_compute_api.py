@@ -168,10 +168,11 @@ class _ComputeAPIUnitTestMixIn(object):
     @mock.patch('nova.conductor.conductor_api.ComputeTaskAPI.build_instances')
     @mock.patch('nova.compute.api.API._record_action_start')
     @mock.patch('nova.compute.api.API._check_requested_networks')
+    @mock.patch('nova.quota.QUOTAS.limit_check')
     @mock.patch('nova.compute.api.API._get_image')
     @mock.patch('nova.compute.api.API._provision_instances')
     def test_create_with_networks_max_count_none(self, provision_instances,
-                                                 get_image,
+                                                 get_image, check_limit,
                                                  check_requested_networks,
                                                  record_action_start,
                                                  build_instances):
@@ -4447,6 +4448,158 @@ class _ComputeAPIUnitTestMixIn(object):
                                          cell_instances):
                 self.assertEqual(instance, instances[i])
 
+    @mock.patch.object(objects.BuildRequest, 'get_by_instance_uuid')
+    @mock.patch.object(objects.InstanceMapping, 'get_by_instance_uuid')
+    def test_update_existing_instance_not_in_cell(self, mock_instmap_get,
+                                                  mock_buildreq_get):
+        mock_instmap_get.side_effect = exception.InstanceMappingNotFound(
+            uuid='fake')
+        self.useFixture(fixtures.AllServicesCurrent())
+
+        instance = self._create_instance_obj()
+        # Just making sure that the instance has been created
+        self.assertIsNotNone(instance.id)
+        updates = {'display_name': 'foo_updated'}
+        with mock.patch.object(instance, 'save') as mock_inst_save:
+            returned_instance = self.compute_api.update_instance(
+                self.context, instance, updates)
+        mock_buildreq_get.assert_not_called()
+        self.assertEqual('foo_updated', returned_instance.display_name)
+        mock_inst_save.assert_called_once_with()
+
+    @mock.patch.object(objects.BuildRequest, 'get_by_instance_uuid')
+    @mock.patch.object(context, 'target_cell')
+    @mock.patch.object(objects.InstanceMapping, 'get_by_instance_uuid')
+    def test_update_existing_instance_in_cell(self, mock_instmap_get,
+                                              mock_target_cell,
+                                              mock_buildreq_get):
+        inst_map = objects.InstanceMapping(cell_mapping=objects.CellMapping())
+        mock_instmap_get.return_value = inst_map
+        self.useFixture(fixtures.AllServicesCurrent())
+
+        instance = self._create_instance_obj()
+        # Just making sure that the instance has been created
+        self.assertIsNotNone(instance.id)
+        updates = {'display_name': 'foo_updated'}
+        with mock.patch.object(instance, 'save') as mock_inst_save:
+            returned_instance = self.compute_api.update_instance(
+                self.context, instance, updates)
+        mock_target_cell.assert_called_once_with(self.context,
+                                                 inst_map.cell_mapping)
+        mock_buildreq_get.assert_not_called()
+        self.assertEqual('foo_updated', returned_instance.display_name)
+        mock_inst_save.assert_called_once_with()
+
+    @mock.patch.object(objects.BuildRequest, 'get_by_instance_uuid')
+    def test_update_future_instance_with_buildreq(self, mock_buildreq_get):
+
+        # This test checks that a new instance which is not yet peristed in
+        # DB can be found by looking up the BuildRequest object so we can
+        # update it.
+
+        build_req_obj = fake_build_request.fake_req_obj(self.context)
+        mock_buildreq_get.return_value = build_req_obj
+        self.useFixture(fixtures.AllServicesCurrent())
+
+        instance = self._create_instance_obj()
+        # Fake the fact that the instance is not yet persisted in DB
+        del instance.id
+
+        updates = {'display_name': 'foo_updated'}
+        with mock.patch.object(build_req_obj, 'save') as mock_buildreq_save:
+            returned_instance = self.compute_api.update_instance(
+                self.context, instance, updates)
+
+        mock_buildreq_get.assert_called_once_with(self.context, instance.uuid)
+        self.assertEqual(build_req_obj.instance, returned_instance)
+        mock_buildreq_save.assert_called_once_with()
+        self.assertEqual('foo_updated', returned_instance.display_name)
+
+    @mock.patch.object(context, 'target_cell')
+    @mock.patch.object(objects.Instance, 'get_by_uuid')
+    @mock.patch.object(objects.InstanceMapping, 'get_by_instance_uuid')
+    @mock.patch.object(objects.BuildRequest, 'get_by_instance_uuid')
+    def test_update_instance_in_cell_in_transition_state(self,
+                                                         mock_buildreq_get,
+                                                         mock_instmap_get,
+                                                         mock_inst_get,
+                                                         mock_target_cell):
+
+        # This test is for covering the following case:
+        #  - when we lookup the instance initially, that one is not yet mapped
+        #    to a cell and consequently we retrieve it from the BuildRequest
+        #  - when we update the instance, that one could have been mapped
+        #    meanwhile and the BuildRequest was deleted
+        #  - if the instance is mapped, lookup the cell DB to find the instance
+
+        self.useFixture(fixtures.AllServicesCurrent())
+
+        instance = self._create_instance_obj()
+        # Fake the fact that the instance is not yet persisted in DB
+        del instance.id
+
+        mock_buildreq_get.side_effect = exception.BuildRequestNotFound(
+            uuid=instance.uuid)
+        inst_map = objects.InstanceMapping(cell_mapping=objects.CellMapping())
+        mock_instmap_get.return_value = inst_map
+        mock_inst_get.return_value = instance
+
+        updates = {'display_name': 'foo_updated'}
+        with mock.patch.object(instance, 'save') as mock_inst_save:
+            returned_instance = self.compute_api.update_instance(
+                self.context, instance, updates)
+
+        mock_buildreq_get.assert_called_once_with(self.context, instance.uuid)
+        mock_target_cell.assert_called_once_with(self.context,
+                                                 inst_map.cell_mapping)
+        mock_inst_save.assert_called_once_with()
+        self.assertEqual('foo_updated', returned_instance.display_name)
+
+    @mock.patch.object(objects.Instance, 'get_by_uuid')
+    @mock.patch.object(objects.InstanceMapping, 'get_by_instance_uuid')
+    @mock.patch.object(objects.BuildRequest, 'get_by_instance_uuid')
+    def test_update_instance_not_in_cell_in_transition_state(self,
+                                                             mock_buildreq_get,
+                                                             mock_instmap_get,
+                                                             mock_inst_get):
+
+        # This test is for covering the following case:
+        #  - when we lookup the instance initially, that one is not yet mapped
+        #    to a cell and consequently we retrieve it from the BuildRequest
+        #  - when we update the instance, that one could have been mapped
+        #    meanwhile and the BuildRequest was deleted
+        #  - if the instance is not mapped, lookup the API DB to find whether
+        #    the instance was deleted, or if the cellv2 migration is not done
+
+        self.useFixture(fixtures.AllServicesCurrent())
+
+        instance = self._create_instance_obj()
+        # Fake the fact that the instance is not yet persisted in DB
+        del instance.id
+
+        mock_buildreq_get.side_effect = exception.BuildRequestNotFound(
+            uuid=instance.uuid)
+        mock_instmap_get.side_effect = exception.InstanceMappingNotFound(
+            uuid='fake')
+        mock_inst_get.return_value = instance
+
+        updates = {'display_name': 'foo_updated'}
+        with mock.patch.object(instance, 'save') as mock_inst_save:
+            returned_instance = self.compute_api.update_instance(
+                self.context, instance, updates)
+
+        mock_buildreq_get.assert_called_once_with(self.context, instance.uuid)
+        mock_inst_save.assert_called_once_with()
+        self.assertEqual('foo_updated', returned_instance.display_name)
+
+        # Let's do a quick verification on the same unittest to see what
+        # happens if the instance was deleted meanwhile.
+        mock_inst_get.side_effect = exception.InstanceNotFound(
+            instance_id=instance.uuid)
+        self.assertRaises(exception.InstanceNotFound,
+                          self.compute_api.update_instance,
+                          self.context, instance, updates)
+
 
 class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
     def setUp(self):
@@ -4525,6 +4678,20 @@ class ComputeAPIAPICellUnitTestCase(_ComputeAPIUnitTestMixIn,
         count = self.compute_api._check_requested_networks(
             self.context, requested_networks, 5)
         self.assertEqual(5, count)
+
+    def _test_shelve(self, vm_state=vm_states.ACTIVE,
+                     boot_from_volume=False, clean_shutdown=True):
+        params = dict(task_state=None, vm_state=vm_state,
+                      display_name='fake-name')
+        instance = self._create_instance_obj(params=params)
+        with mock.patch.object(self.compute_api,
+                               '_cast_to_cells') as cast_to_cells:
+            self.compute_api.shelve(self.context, instance,
+                                    clean_shutdown=clean_shutdown)
+            cast_to_cells.assert_called_once_with(self.context,
+                                                  instance, 'shelve',
+                                                  clean_shutdown=clean_shutdown
+                                                  )
 
 
 class ComputeAPIComputeCellUnitTestCase(_ComputeAPIUnitTestMixIn,

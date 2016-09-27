@@ -4061,29 +4061,6 @@ class ComputeTestCase(BaseTestCase):
                 bind_host_id=self.compute.host)
         mock_mac.assert_called_once_with(test.MatchType(instance_obj.Instance))
 
-    def _create_server_group(self, policies, instance_host):
-        group_instance = self._create_fake_instance_obj(
-                params=dict(host=instance_host))
-
-        instance_group = objects.InstanceGroup(self.context)
-        instance_group.user_id = self.user_id
-        instance_group.project_id = self.project_id
-        instance_group.name = 'messi'
-        instance_group.uuid = str(uuid.uuid4())
-        instance_group.members = [group_instance.uuid]
-        instance_group.policies = policies
-        fake_notifier.NOTIFICATIONS = []
-        instance_group.create()
-        self.assertEqual(1, len(fake_notifier.NOTIFICATIONS))
-        msg = fake_notifier.NOTIFICATIONS[0]
-        self.assertEqual(instance_group.name, msg.payload['name'])
-        self.assertEqual(instance_group.members, msg.payload['members'])
-        self.assertEqual(instance_group.policies, msg.payload['policies'])
-        self.assertEqual(instance_group.project_id, msg.payload['project_id'])
-        self.assertEqual(instance_group.uuid, msg.payload['uuid'])
-        self.assertEqual('servergroup.create', msg.event_type)
-        return instance_group
-
     def test_instance_set_to_error_on_uncaught_exception(self):
         # Test that instance is set to error state when exception is raised.
         instance = self._create_fake_instance_obj()
@@ -7869,7 +7846,8 @@ class ComputeAPITestCase(BaseTestCase):
 
             self.assertEqual(ref[0]['hostname'], hostname)
 
-    def test_instance_create_adds_to_instance_group(self):
+    @mock.patch('nova.compute.api.API._get_requested_instance_group')
+    def test_instance_create_adds_to_instance_group(self, get_group_mock):
         self.stub_out('nova.tests.unit.image.fake._FakeImageService.show',
                       self.fake_show)
 
@@ -7878,11 +7856,13 @@ class ComputeAPITestCase(BaseTestCase):
         group.project_id = self.context.project_id
         group.user_id = self.context.user_id
         group.create()
+        get_group_mock.return_value = group
 
         inst_type = flavors.get_default_flavor()
         (refs, resv_id) = self.compute_api.create(
             self.context, inst_type, self.fake_image['id'],
             scheduler_hints={'group': group.uuid})
+        self.assertEqual(len(refs), len(group.members))
 
         group = objects.InstanceGroup.get_by_uuid(self.context, group.uuid)
         self.assertIn(refs[0]['uuid'], group.members)

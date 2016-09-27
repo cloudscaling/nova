@@ -168,9 +168,19 @@ class HackingTestCase(test.NoDBTestCase):
         self.assertEqual(
             len(list(checks.assert_equal_none("self.assertIsNone()"))), 0)
 
-    def test_assert_true_or_false_with_in_or_not_in(self):
         self.assertEqual(len(list(checks.assert_equal_none(
-            "self.assertEqual(A, None)"))), 1)
+            "self.assertIs(A, None)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_equal_none(
+            "self.assertIsNot(A, None)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_equal_none(
+            "self.assertIs(None, A)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_equal_none(
+            "self.assertIsNot(None, A)"))), 1)
+
+    def test_assert_true_or_false_with_in_or_not_in(self):
         self.assertEqual(len(list(checks.assert_true_or_false_with_in(
             "self.assertTrue(A in B)"))), 1)
 
@@ -343,7 +353,11 @@ class HackingTestCase(test.NoDBTestCase):
         lines = textwrap.dedent(code).strip().splitlines(True)
 
         checker = pep8.Checker(filename=filename, lines=lines)
-        checker.check_all()
+        # NOTE(sdague): the standard reporter has printing to stdout
+        # as a normal part of check_all, which bleeds through to the
+        # test output stream in an unhelpful way. This blocks that printing.
+        with mock.patch('pep8.StandardReport.get_file_results'):
+            checker.check_all()
         checker.report._deferred_print.sort()
         return checker.report._deferred_print
 
@@ -749,3 +763,10 @@ class HackingTestCase(test.NoDBTestCase):
         foo.enforce()
         """
         self._assert_has_no_errors(code, checks.check_policy_enforce)
+
+    def test_check_python3_xrange(self):
+        func = checks.check_python3_xrange
+        self.assertEqual(1, len(list(func('for i in xrange(10)'))))
+        self.assertEqual(1, len(list(func('for i in xrange    (10)'))))
+        self.assertEqual(0, len(list(func('for i in range(10)'))))
+        self.assertEqual(0, len(list(func('for i in six.moves.range(10)'))))

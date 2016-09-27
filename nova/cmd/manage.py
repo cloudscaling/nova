@@ -66,6 +66,7 @@ from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_utils import importutils
 from oslo_utils import uuidutils
+import prettytable
 import six
 import six.moves.urllib.parse as urlparse
 
@@ -291,7 +292,7 @@ class ProjectCommands(object):
         else:
             quota = QUOTAS.get_project_quotas(ctxt, project_id)
         for key, value in six.iteritems(quota):
-            if value['limit'] < 0 or value['limit'] is None:
+            if value['limit'] is None or value['limit'] < 0:
                 value['limit'] = 'unlimited'
             print(print_format % (key, value['limit'], value['in_use'],
                                   value['reserved']))
@@ -783,7 +784,6 @@ class DbCommands(object):
     """Class for managing the main database."""
 
     online_migrations = (
-        db.pcidevice_online_data_migration,
         db.aggregate_uuids_online_data_migration,
         flavor_obj.migrate_flavors,
         flavor_obj.migrate_flavor_reset_autoincrement,
@@ -881,6 +881,7 @@ class DbCommands(object):
 
     def _run_migration(self, ctxt, max_count):
         ran = 0
+        migrations = {}
         for migration_meth in self.online_migrations:
             count = max_count - ran
             try:
@@ -890,16 +891,20 @@ class DbCommands(object):
                       method=migration_meth))
                 found = done = 0
 
+            name = migration_meth.__name__
             if found:
                 print(_('%(total)i rows matched query %(meth)s, %(done)i '
                         'migrated') % {'total': found,
-                                       'meth': migration_meth.__name__,
+                                       'meth': name,
                                        'done': done})
+            migrations.setdefault(name, (0, 0))
+            migrations[name] = (migrations[name][0] + found,
+                                migrations[name][1] + done)
             if max_count is not None:
                 ran += done
                 if ran >= max_count:
                     break
-        return ran
+        return migrations
 
     @args('--max-count', metavar='<number>', dest='max_count',
           help='Maximum number of objects to consider')
@@ -920,10 +925,21 @@ class DbCommands(object):
             print(_('Running batches of %i until complete') % max_count)
 
         ran = None
+        migration_info = {}
         while ran is None or ran != 0:
-            ran = self._run_migration(ctxt, max_count)
+            migrations = self._run_migration(ctxt, max_count)
+            migration_info.update(migrations)
+            ran = sum([done for found, done in migrations.values()])
             if not unlimited:
                 break
+
+        t = prettytable.PrettyTable([_('Migration'),
+                                     _('Total Needed'),
+                                     _('Completed')])
+        for name in sorted(migration_info.keys()):
+            info = migration_info[name]
+            t.add_row([name, info[0], info[1]])
+        print(t)
 
         return ran and 1 or 0
 
@@ -1496,6 +1512,10 @@ class CellV2Commands(object):
         """
         ctxt = context.RequestContext()
 
+        # TODO(alaski): If this is not run on a host configured to use the API
+        # database most of the lookups below will fail and may not provide a
+        # great error message. Add a check which will raise a useful error
+        # message about running this from an API host.
         if cell_uuid:
             cell_mappings = [objects.CellMapping.get_by_uuid(ctxt, cell_uuid)]
         else:

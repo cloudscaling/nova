@@ -370,6 +370,7 @@ Related options:
     cfg.BoolOpt("share_dhcp_address",
             default=False,
             deprecated_for_removal=True,
+            deprecated_since='2014.2',
             help="""
 THIS VALUE SHOULD BE SET WHEN CREATING THE NETWORK.
 
@@ -381,20 +382,6 @@ The use of this configuration has been deprecated and may be removed in any
 release after Mitaka. It is recommended that instead of relying on this option,
 an explicit value should be passed to 'create_networks()' as a keyword argument
 with the name 'share_address'.
-"""),
-
-    # NOTE(mriedem): Remove network_device_mtu in Newton.
-    cfg.IntOpt("network_device_mtu",
-            deprecated_for_removal=True,
-            help="""
-THIS VALUE SHOULD BE SET WHEN CREATING THE NETWORK.
-
-MTU (Maximum Transmission Unit) setting for a network interface.
-
-The use of this configuration has been deprecated and may be removed in any
-release after Mitaka. It is recommended that instead of relying on this option,
-an explicit value should be passed to 'create_networks()' as a keyword argument
-with the name 'mtu'.
 """),
     cfg.BoolOpt('use_neutron',
                 default=False,

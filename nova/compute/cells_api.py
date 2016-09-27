@@ -24,6 +24,7 @@ from nova.cells import rpcapi as cells_rpcapi
 from nova.cells import utils as cells_utils
 from nova.compute import api as compute_api
 from nova.compute import rpcapi as compute_rpcapi
+from nova.compute import vm_states
 from nova import exception
 from nova import objects
 from nova.objects import base as obj_base
@@ -221,7 +222,23 @@ class ComputeCellsAPI(compute_api.API):
                     context, instance.uuid)
             # NOTE(danms): If we try to delete an instance with no cell,
             # there isn't anything to salvage, so we can hard-delete here.
-            if self._delete_while_booting(context, instance):
+            try:
+                if self._delete_while_booting(context, instance):
+                    return
+            except exception.ObjectActionError:
+                # NOTE(alaski): We very likely got here because the host
+                # constraint in instance.destroy() failed.  This likely means
+                # that an update came up from a child cell and cell_name is
+                # set now.  We handle this similarly to how the
+                # ObjectActionError is handled below.
+                with excutils.save_and_reraise_exception() as exc:
+                    instance = self._lookup_instance(context, instance.uuid)
+                    if instance is None:
+                        exc.reraise = False
+                    elif instance.cell_name:
+                        exc.reraise = False
+                        self._handle_cell_delete(context, instance,
+                                                 method_name)
                 return
             # If instance.cell_name was not set it's possible that the Instance
             # object here was pulled from a BuildRequest object and is not
@@ -332,10 +349,10 @@ class ComputeCellsAPI(compute_api.API):
         self._cast_to_cells(context, instance, 'unrescue')
 
     @check_instance_cell
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED,
+                                    vm_states.PAUSED, vm_states.SUSPENDED])
     def shelve(self, context, instance, clean_shutdown=True):
         """Shelve the given instance."""
-        super(ComputeCellsAPI, self).shelve(context, instance,
-                clean_shutdown=clean_shutdown)
         self._cast_to_cells(context, instance, 'shelve',
                 clean_shutdown=clean_shutdown)
 
@@ -348,9 +365,10 @@ class ComputeCellsAPI(compute_api.API):
                 clean_shutdown=clean_shutdown)
 
     @check_instance_cell
+    @check_instance_state(vm_state=[vm_states.SHELVED,
+                                    vm_states.SHELVED_OFFLOADED])
     def unshelve(self, context, instance):
         """Unshelve the given instance."""
-        super(ComputeCellsAPI, self).unshelve(context, instance)
         self._cast_to_cells(context, instance, 'unshelve')
 
     @check_instance_cell

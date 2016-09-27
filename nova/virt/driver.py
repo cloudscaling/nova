@@ -24,6 +24,7 @@ import sys
 
 from oslo_log import log as logging
 from oslo_utils import importutils
+import six
 
 import nova.conf
 from nova.i18n import _, _LE, _LI
@@ -556,6 +557,12 @@ class ComputeDriver(object):
         :param instance: nova.objects.instance.Instance
         :param image_id: Reference to a pre-created image that will
                          hold the snapshot.
+        :param update_task_state: Callback function to update the task_state
+            on the instance while the snapshot operation progresses. The
+            function takes a task_state argument and an optional
+            expected_task_state kwarg which defaults to
+            nova.compute.task_states.IMAGE_SNAPSHOT. See
+            nova.objects.instance.Instance.save for expected_task_state usage.
         """
         raise NotImplementedError()
 
@@ -1428,7 +1435,7 @@ class ComputeDriver(object):
         """
 
         if not self._compute_event_callback:
-            LOG.debug("Discarding event %s", str(event))
+            LOG.debug("Discarding event %s", six.text_type(event))
             return
 
         if not isinstance(event, virtevent.Event):
@@ -1436,7 +1443,7 @@ class ComputeDriver(object):
                 _("Event must be an instance of nova.virt.event.Event"))
 
         try:
-            LOG.debug("Emitting event %s", str(event))
+            LOG.debug("Emitting event %s", six.text_type(event))
             self._compute_event_callback(event)
         except Exception as ex:
             LOG.error(_LE("Exception dispatching event %(event)s: %(ex)s"),

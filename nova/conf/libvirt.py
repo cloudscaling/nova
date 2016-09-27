@@ -221,6 +221,9 @@ Related options:
     cfg.BoolOpt('use_usb_tablet',
                 default=True,
                 deprecated_for_removal=True,
+                deprecated_reason="This option is being replaced by the "
+                                  "'pointer_model' option.",
+                deprecated_since='14.0.0',
                 help="""
 Enable a mouse cursor within a graphical VNC or SPICE sessions.
 
@@ -448,7 +451,8 @@ Related options:
 This is a performance event list which could be used as monitor. These events
 will be passed to libvirt domain xml while creating a new instances.
 Then event statistics data can be collected from libvirt.  The minimum
-libvirt version is 1.3.3.
+libvirt version is 2.0.0. For more information about `Performance monitoring
+events`, refer https://libvirt.org/formatdomain.html#elementsPerf .
 
 * Possible values:
     A string list.
@@ -500,31 +504,34 @@ libvirt_imagecache_opts = [
     cfg.StrOpt('image_info_filename_pattern',
                default='$instances_path/$image_cache_subdirectory_name/'
                        '%(image)s.info',
-               help='Allows image information files to be stored in '
-                    'non-standard locations',
                deprecated_for_removal=True,
+               deprecated_since='14.0.0',
                deprecated_reason='Image info files are no longer used by the '
-                                 'image cache'),
+                                 'image cache',
+               help='Allows image information files to be stored in '
+                    'non-standard locations'),
     cfg.IntOpt('remove_unused_resized_minimum_age_seconds',
                default=3600,
                help='Unused resized base images younger than this will not be '
                     'removed'),
     cfg.BoolOpt('checksum_base_images',
                 default=False,
-                help='Write a checksum for files in _base to disk',
                 deprecated_for_removal=True,
+                deprecated_since='14.0.0',
                 deprecated_reason='The image cache no longer periodically '
                                   'calculates checksums of stored images. '
                                   'Data integrity can be checked at the block '
-                                  'or filesystem level.'),
+                                  'or filesystem level.',
+                help='Write a checksum for files in _base to disk'),
     cfg.IntOpt('checksum_interval_seconds',
                default=3600,
-               help='How frequently to checksum base images',
                deprecated_for_removal=True,
+               deprecated_since='14.0.0',
                deprecated_reason='The image cache no longer periodically '
                                  'calculates checksums of stored images. '
                                  'Data integrity can be checked at the block '
-                                 'or filesystem level.'),
+                                 'or filesystem level.',
+               help='How frequently to checksum base images'),
 ]
 
 libvirt_lvm_opts = [
@@ -557,8 +564,8 @@ libvirt_volume_opts = [
                      'from QEMU. Currently supported protocols: [gluster]'),
     cfg.BoolOpt('volume_use_multipath',
                 default=False,
-                help='Use multipath connection of the iSCSI or FC volume',
-                deprecated_name='iscsi_use_multipath'),
+                deprecated_name='iscsi_use_multipath',
+                help='Use multipath connection of the iSCSI or FC volume')
 ]
 
 libvirt_volume_aoe_opts = [
@@ -607,7 +614,7 @@ libvirt_volume_net_opts = [
                help='The RADOS client name for accessing rbd volumes'),
     cfg.StrOpt('rbd_secret_uuid',
                help='The libvirt UUID of the secret for the rbd_user'
-                    'volumes'),
+                    ' volumes'),
 ]
 
 libvirt_volume_nfs_opts = [

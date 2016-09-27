@@ -33,7 +33,6 @@ import inspect
 import sys
 import time
 import traceback
-import uuid
 
 from cinderclient import exceptions as cinder_exception
 import eventlet.event
@@ -49,6 +48,7 @@ from oslo_service import periodic_task
 from oslo_utils import excutils
 from oslo_utils import strutils
 from oslo_utils import timeutils
+from oslo_utils import uuidutils
 import six
 from six.moves import range
 
@@ -512,7 +512,8 @@ class ComputeManager(manager.Manager):
         self.scheduler_client = scheduler_client.SchedulerClient()
         self._resource_tracker_dict = {}
         self.instance_events = InstanceEvents()
-        self._sync_power_pool = eventlet.GreenPool()
+        self._sync_power_pool = eventlet.GreenPool(
+            size=CONF.sync_power_state_pool_size)
         self._syncs_in_progress = {}
         self.send_instance_updates = CONF.scheduler_tracks_instance_changes
         if CONF.max_concurrent_builds != 0:
@@ -1924,7 +1925,7 @@ class ComputeManager(manager.Manager):
                 exception.UnexpectedDeletingTaskStateError) as e:
             with excutils.save_and_reraise_exception():
                 self._notify_about_instance_usage(context, instance,
-                    'create.end', fault=e)
+                    'create.error', fault=e)
         except exception.ComputeResourcesUnavailable as e:
             LOG.debug(e.format_message(), instance=instance)
             self._notify_about_instance_usage(context, instance,
@@ -1962,6 +1963,7 @@ class ComputeManager(manager.Manager):
                 exception.ImageNotActive,
                 exception.ImageUnacceptable,
                 exception.InvalidDiskInfo,
+                exception.InvalidDiskFormat,
                 exception.SignatureVerificationError) as e:
             self._notify_about_instance_usage(context, instance,
                     'create.error', fault=e)
@@ -2000,7 +2002,7 @@ class ComputeManager(manager.Manager):
                 exception.UnexpectedDeletingTaskStateError) as e:
             with excutils.save_and_reraise_exception():
                 self._notify_about_instance_usage(context, instance,
-                    'create.end', fault=e)
+                    'create.error', fault=e)
 
         self._update_scheduler_instance_info(context, instance)
         self._notify_about_instance_usage(context, instance, 'create.end',
@@ -2076,10 +2078,11 @@ class ComputeManager(manager.Manager):
             yield resources
         except Exception as exc:
             with excutils.save_and_reraise_exception() as ctxt:
-                if not isinstance(exc, (exception.InstanceNotFound,
-                    exception.UnexpectedDeletingTaskStateError)):
-                        LOG.exception(_LE('Instance failed to spawn'),
-                                instance=instance)
+                if not isinstance(exc, (
+                        exception.InstanceNotFound,
+                        exception.UnexpectedDeletingTaskStateError)):
+                    LOG.exception(_LE('Instance failed to spawn'),
+                                  instance=instance)
                 # Make sure the async call finishes
                 if network_info is not None:
                     network_info.wait(do_raise=False)
@@ -2666,12 +2669,15 @@ class ComputeManager(manager.Manager):
         # the instance's host and node properties to reflect it's
         # destination node for the recreate.
         if not scheduled_node:
-            try:
-                compute_node = self._get_compute_info(context, self.host)
-                scheduled_node = compute_node.hypervisor_hostname
-            except exception.ComputeHostNotFound:
-                LOG.exception(_LE('Failed to get compute_info for %s'),
-                                self.host)
+            if recreate:
+                try:
+                    compute_node = self._get_compute_info(context, self.host)
+                    scheduled_node = compute_node.hypervisor_hostname
+                except exception.ComputeHostNotFound:
+                    LOG.exception(_LE('Failed to get compute_info for %s'),
+                                  self.host)
+            else:
+                scheduled_node = instance.node
 
         with self._error_out_instance_on_exception(context, instance):
             try:
@@ -2795,7 +2801,6 @@ class ComputeManager(manager.Manager):
         instance.save(expected_task_state=[task_states.REBUILDING])
 
         if recreate:
-            # Needed for nova-network, does nothing for neutron
             self.network_api.setup_networks_on_host(
                     context, instance, self.host)
             # For nova-network this is needed to move floating IPs
@@ -3006,8 +3011,8 @@ class ComputeManager(manager.Manager):
         """Snapshot an instance on this host.
 
         :param context: security context
-        :param instance: a nova.objects.instance.Instance object
         :param image_id: glance.db.sqlalchemy.models.Image.Id
+        :param instance: a nova.objects.instance.Instance object
         """
         # NOTE(dave-mcnally) the task state will already be set by the api
         # but if the compute manager has crashed/been restarted prior to the
@@ -4436,7 +4441,7 @@ class ComputeManager(manager.Manager):
         """Return connection information for a vnc console."""
         context = context.elevated()
         LOG.debug("Getting vnc console", instance=instance)
-        token = str(uuid.uuid4())
+        token = uuidutils.generate_uuid()
 
         if not CONF.vnc.enabled:
             raise exception.ConsoleTypeUnavailable(console_type=console_type)
@@ -4473,7 +4478,7 @@ class ComputeManager(manager.Manager):
         """Return connection information for a spice console."""
         context = context.elevated()
         LOG.debug("Getting spice console", instance=instance)
-        token = str(uuid.uuid4())
+        token = uuidutils.generate_uuid()
 
         if not CONF.spice.enabled:
             raise exception.ConsoleTypeUnavailable(console_type=console_type)
@@ -4509,7 +4514,7 @@ class ComputeManager(manager.Manager):
         """Return connection information for a RDP console."""
         context = context.elevated()
         LOG.debug("Getting RDP console", instance=instance)
-        token = str(uuid.uuid4())
+        token = uuidutils.generate_uuid()
 
         if not CONF.rdp.enabled:
             raise exception.ConsoleTypeUnavailable(console_type=console_type)
@@ -4543,7 +4548,7 @@ class ComputeManager(manager.Manager):
         """Return connection information for a MKS console."""
         context = context.elevated()
         LOG.debug("Getting MKS console", instance=instance)
-        token = str(uuid.uuid4())
+        token = uuidutils.generate_uuid()
 
         if not CONF.mks.enabled:
             raise exception.ConsoleTypeUnavailable(console_type=console_type)
@@ -4587,7 +4592,7 @@ class ComputeManager(manager.Manager):
 
         context = context.elevated()
 
-        token = str(uuid.uuid4())
+        token = uuidutils.generate_uuid()
         access_url = '%s?token=%s' % (CONF.serial_console.base_url, token)
 
         try:

@@ -63,7 +63,6 @@ class ServersSampleBase(api_sample_base.ApiSampleTestBaseV21):
         }
 
         orig_value = self.__class__._use_common_server_api_samples
-        orig_sample_dir = self.__class__.sample_dir
         try:
             self.__class__._use_common_server_api_samples = (
                                         use_common_server_api_samples)
@@ -74,7 +73,6 @@ class ServersSampleBase(api_sample_base.ApiSampleTestBaseV21):
             return status
         finally:
             self.__class__._use_common_server_api_samples = orig_value
-            self.__class__.sample_dir = orig_sample_dir
 
     def setUp(self):
         super(ServersSampleBase, self).setUp()
@@ -130,6 +128,11 @@ class ServersSampleJsonTest(ServersSampleBase):
         # config drive can be a string for True or empty value for False
         subs['cdrive'] = '.*'
         self._verify_response('servers-details-resp', subs, response, 200)
+
+
+class ServersSampleJson23Test(ServersSampleJsonTest):
+    microversion = '2.3'
+    scenarios = [('v2_3', {'api_major_version': 'v2.1'})]
 
 
 class ServersSampleJson29Test(ServersSampleJsonTest):

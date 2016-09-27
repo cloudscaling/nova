@@ -29,7 +29,6 @@ import datetime
 import functools
 import math
 import re
-import uuid
 
 import netaddr
 from oslo_log import log as logging
@@ -702,7 +701,7 @@ class NetworkManager(manager.Manager):
                 vif.address = mac or utils.generate_mac_address()
                 vif.instance_uuid = instance_uuid
                 vif.network_id = network_id
-                vif.uuid = str(uuid.uuid4())
+                vif.uuid = uuidutils.generate_uuid()
                 vif.tag = tag
                 vif.create()
                 return vif
@@ -1111,8 +1110,6 @@ class NetworkManager(manager.Manager):
                         bridge_interface=None, dns1=None, dns2=None,
                         fixed_cidr=None, allowed_start=None,
                         allowed_end=None, **kwargs):
-        if 'mtu' not in kwargs:
-            kwargs['mtu'] = CONF.network_device_mtu
         if 'dhcp_server' not in kwargs:
             kwargs['dhcp_server'] = gateway
         if 'enable_dhcp' not in kwargs:

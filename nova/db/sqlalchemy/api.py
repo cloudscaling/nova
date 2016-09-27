@@ -23,7 +23,6 @@ import datetime
 import functools
 import inspect
 import sys
-import uuid
 
 from oslo_db import api as oslo_db_api
 from oslo_db import exception as db_exc
@@ -1734,6 +1733,7 @@ def _check_instance_exists_in_project(context, instance_uuid):
 
 
 @require_context
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 @pick_context_manager_writer
 def instance_create(context, values):
     """Create a new Instance record in the database.
@@ -1754,7 +1754,7 @@ def instance_create(context, values):
 
     instance_ref = models.Instance()
     if not values.get('uuid'):
-        values['uuid'] = str(uuid.uuid4())
+        values['uuid'] = uuidutils.generate_uuid()
     instance_ref['info_cache'] = models.InstanceInfoCache()
     info_cache = values.pop('info_cache', None)
     if info_cache is not None:
@@ -1844,6 +1844,9 @@ def instance_destroy(context, instance_uuid, constraint=None):
             filter_by(instance_id=instance_uuid).\
             soft_delete()
     model_query(context, models.BlockDeviceMapping).\
+            filter_by(instance_uuid=instance_uuid).\
+            soft_delete()
+    model_query(context, models.Migration).\
             filter_by(instance_uuid=instance_uuid).\
             soft_delete()
     # NOTE(snikitin): We can't use model_query here, because there is no
@@ -3035,7 +3038,7 @@ def network_count_reserved_ips(context, network_id):
 @main_context_manager.writer
 def network_create_safe(context, values):
     network_ref = models.Network()
-    network_ref['uuid'] = str(uuid.uuid4())
+    network_ref['uuid'] = uuidutils.generate_uuid()
     network_ref.update(values)
 
     try:
@@ -3833,7 +3836,7 @@ def quota_reserve(context, resources, project_quotas, user_quotas, deltas,
         reservations = []
         for res, delta in deltas.items():
             reservation = _reservation_create(
-                                             str(uuid.uuid4()),
+                                             uuidutils.generate_uuid(),
                                              user_usages[res],
                                              project_id,
                                              user_id,
@@ -6313,7 +6316,10 @@ def _archive_deleted_rows_for_table(tablename, max_rows):
     # NOTE(clecomte): Tables instance_actions and instances_actions_events
     # have to be manage differently so we soft-delete them here to let
     # the archive work the same for all tables
-    if tablename == "instance_actions":
+    # NOTE(takashin): The record in table migrations should be
+    # soft deleted when the instance is deleted.
+    # This is just for upgrading.
+    if tablename in ("instance_actions", "migrations"):
         instances = models.BASE.metadata.tables["instances"]
         deleted_instances = sql.select([instances.c.uuid]).\
             where(instances.c.deleted != instances.c.deleted.default.arg)
@@ -6404,31 +6410,6 @@ def archive_deleted_rows(max_rows=None):
         if total_rows_archived >= max_rows:
             break
     return table_to_rows_archived
-
-
-@main_context_manager.writer
-def pcidevice_online_data_migration(context, max_count):
-    from nova.objects import pci_device as pci_dev_obj
-
-    count_all = 0
-    count_hit = 0
-
-    if not pci_dev_obj.PciDevice.should_migrate_data():
-        LOG.error(_LE("Data migrations for PciDevice are not safe, likely "
-                      "because not all services that access the DB directly "
-                      "are updated to the latest version"))
-    else:
-        results = model_query(context, models.PciDevice).filter_by(
-            parent_addr=None).limit(max_count)
-
-        for db_dict in results:
-            count_all += 1
-            pci_dev = pci_dev_obj.PciDevice._from_db_object(
-                context, pci_dev_obj.PciDevice(), db_dict)
-            if pci_dev.obj_what_changed():
-                pci_dev.save()
-                count_hit += 1
-    return count_all, count_hit
 
 
 @main_context_manager.writer

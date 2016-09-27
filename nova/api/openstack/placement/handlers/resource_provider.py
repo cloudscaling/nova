@@ -13,7 +13,6 @@
 
 import copy
 
-import jsonschema
 from oslo_db import exception as db_exc
 from oslo_serialization import jsonutils
 from oslo_utils import uuidutils
@@ -21,6 +20,7 @@ import webob
 
 from nova.api.openstack.placement import util
 from nova import exception
+from nova.i18n import _
 from nova import objects
 
 
@@ -43,25 +43,6 @@ POST_RESOURCE_PROVIDER_SCHEMA = {
 # Remove uuid to create the schema for PUTting a resource provider
 PUT_RESOURCE_PROVIDER_SCHEMA = copy.deepcopy(POST_RESOURCE_PROVIDER_SCHEMA)
 PUT_RESOURCE_PROVIDER_SCHEMA['properties'].pop('uuid')
-
-
-def _extract_resource_provider(body, schema):
-    """Extract and validate resource provider from JSON body."""
-    try:
-        data = jsonutils.loads(body)
-    except ValueError as exc:
-        raise webob.exc.HTTPBadRequest(
-            'Malformed JSON: %s' % exc,
-            json_formatter=util.json_error_formatter)
-    try:
-        jsonschema.validate(data, schema,
-                            format_checker=jsonschema.FormatChecker())
-    except jsonschema.ValidationError as exc:
-        raise webob.exc.HTTPBadRequest(
-            'JSON does not validate: %s' % exc,
-            json_formatter=util.json_error_formatter)
-
-    return data
 
 
 def _serialize_links(environ, resource_provider):
@@ -99,8 +80,7 @@ def create_resource_provider(req):
     header pointing to the newly created resource provider.
     """
     context = req.environ['placement.context']
-    data = _extract_resource_provider(req.body,
-                                      POST_RESOURCE_PROVIDER_SCHEMA)
+    data = util.extract_json(req.body, POST_RESOURCE_PROVIDER_SCHEMA)
 
     try:
         uuid = data.get('uuid', uuidutils.generate_uuid())
@@ -109,11 +89,13 @@ def create_resource_provider(req):
         resource_provider.create()
     except db_exc.DBDuplicateEntry as exc:
         raise webob.exc.HTTPConflict(
-            'Conflicting resource provider already exists: %s' % exc,
+            _('Conflicting resource provider already exists: %(error)s') %
+            {'error': exc},
             json_formatter=util.json_error_formatter)
     except exception.ObjectActionError as exc:
         raise webob.exc.HTTPBadRequest(
-            'Unable to create resource provider %s: %s' % (uuid, exc),
+            _('Unable to create resource provider %(rp_uuid)s: %(error)s') %
+            {'rp_uuid': uuid, 'error': exc},
             json_formatter=util.json_error_formatter)
 
     req.response.location = util.resource_provider_url(
@@ -138,7 +120,8 @@ def delete_resource_provider(req):
         resource_provider.destroy()
     except exception.ResourceProviderInUse as exc:
         raise webob.exc.HTTPConflict(
-            'Unable to delete resource provider %s: %s' % (uuid, exc),
+            _('Unable to delete resource provider %(rp_uuid)s: %(error)s') %
+            {'rp_uuid': uuid, 'error': exc},
             json_formatter=util.json_error_formatter)
     req.response.status = 204
     req.response.content_type = None
@@ -181,12 +164,13 @@ def list_resource_providers(req):
     invalid_filters = passed_filters - allowed_filters
     if invalid_filters:
         raise webob.exc.HTTPBadRequest(
-            'Invalid filters: %s' % ', '.join(invalid_filters),
+            _('Invalid filters: %(filters)s') %
+            {'filters': ', '.join(invalid_filters)},
             json_formatter=util.json_error_formatter)
 
     if 'uuid' in req.GET and not uuidutils.is_uuid_like(req.GET['uuid']):
         raise webob.exc.HTTPBadRequest(
-            'Invalid uuid value: %s' % req.GET['uuid'],
+            _('Invalid uuid value: %(uuid)s') % {'uuid': req.GET['uuid']},
             json_formatter=util.json_error_formatter)
 
     filters = {}
@@ -218,8 +202,7 @@ def update_resource_provider(req):
     resource_provider = objects.ResourceProvider.get_by_uuid(
         context, uuid)
 
-    data = _extract_resource_provider(req.body,
-                                      PUT_RESOURCE_PROVIDER_SCHEMA)
+    data = util.extract_json(req.body, PUT_RESOURCE_PROVIDER_SCHEMA)
 
     resource_provider.name = data['name']
 
@@ -227,11 +210,13 @@ def update_resource_provider(req):
         resource_provider.save()
     except db_exc.DBDuplicateEntry as exc:
         raise webob.exc.HTTPConflict(
-            'Conflicting resource provider already exists: %s' % exc,
+            _('Conflicting resource provider already exists: %(error)s') %
+            {'error': exc},
             json_formatter=util.json_error_formatter)
     except exception.ObjectActionError as exc:
         raise webob.exc.HTTPBadRequest(
-            'Unable to save resource provider %s: %s' % (uuid, exc),
+            _('Unable to save resource provider %(rp_uuid)s: %(error)s') %
+            {'rp_uuid': uuid, 'error': exc},
             json_formatter=util.json_error_formatter)
 
     req.response.body = jsonutils.dumps(

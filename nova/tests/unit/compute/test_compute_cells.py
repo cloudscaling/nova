@@ -15,6 +15,7 @@
 """
 Tests For Compute w/ Cells
 """
+import copy
 import functools
 import inspect
 
@@ -27,6 +28,7 @@ from nova.cells import manager
 from nova.compute import api as compute_api
 from nova.compute import cells_api as compute_cells_api
 from nova.compute import flavors
+from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 import nova.conf
@@ -37,6 +39,7 @@ from nova import objects
 from nova import quota
 from nova import test
 from nova.tests.unit.compute import test_compute
+from nova.tests.unit.compute import test_shelve
 from nova.tests.unit import fake_instance
 from nova.tests.unit.objects import test_flavor
 from nova.tests import uuidsentinel as uuids
@@ -295,6 +298,60 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
     def test_force_delete_instance_no_cell(self):
         self._test_delete_instance_no_cell('force_delete')
 
+    @mock.patch.object(compute_api.API, '_delete_while_booting',
+                       side_effect=exception.ObjectActionError(
+                           action='delete', reason='host now set'))
+    @mock.patch.object(compute_api.API, '_local_delete')
+    @mock.patch.object(compute_api.API, '_lookup_instance')
+    @mock.patch.object(compute_api.API, 'delete')
+    def test_delete_instance_no_cell_then_cell(self, mock_delete,
+                                               mock_lookup_instance,
+                                               mock_local_delete,
+                                               mock_delete_while_booting):
+        # This checks the case where initially an instance has no cell_name,
+        # and therefore no host, set but instance.destroy fails because
+        # there is now a host.
+        instance = self._create_fake_instance_obj()
+        instance_with_cell = copy.deepcopy(instance)
+        instance_with_cell.cell_name = 'foo'
+        mock_lookup_instance.return_value = instance_with_cell
+
+        cells_rpcapi = self.compute_api.cells_rpcapi
+
+        @mock.patch.object(cells_rpcapi, 'instance_delete_everywhere')
+        def test(mock_inst_delete_everywhere):
+            self.compute_api.delete(self.context, instance)
+            mock_local_delete.assert_not_called()
+            mock_delete.assert_called_once_with(self.context,
+                                                instance_with_cell)
+
+        test()
+
+    @mock.patch.object(compute_api.API, '_delete_while_booting',
+                       side_effect=exception.ObjectActionError(
+                           action='delete', reason='host now set'))
+    @mock.patch.object(compute_api.API, '_local_delete')
+    @mock.patch.object(compute_api.API, '_lookup_instance')
+    @mock.patch.object(compute_api.API, 'delete')
+    def test_delete_instance_no_cell_then_no_instance(self,
+            mock_delete, mock_lookup_instance, mock_local_delete,
+            mock_delete_while_booting):
+        # This checks the case where initially an instance has no cell_name,
+        # and therefore no host, set but instance.destroy fails because
+        # there is now a host. And then the instance can't be looked up.
+        instance = self._create_fake_instance_obj()
+        mock_lookup_instance.return_value = None
+
+        cells_rpcapi = self.compute_api.cells_rpcapi
+
+        @mock.patch.object(cells_rpcapi, 'instance_delete_everywhere')
+        def test(mock_inst_delete_everywhere):
+            self.compute_api.delete(self.context, instance)
+            mock_local_delete.assert_not_called()
+            mock_delete.assert_not_called()
+
+        test()
+
     def test_get_migrations(self):
         filters = {'cell_name': 'ChildCell', 'status': 'confirmed'}
         migrations = {'migrations': [{'id': 1234}]}
@@ -368,6 +425,49 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
         super(CellsComputeAPITestCase,
               self).test_multi_instance_display_name_template(
                   cells_enabled=True)
+
+
+class CellsShelveComputeAPITestCase(test_shelve.ShelveComputeAPITestCase):
+    def setUp(self):
+        super(CellsShelveComputeAPITestCase, self).setUp()
+        global ORIG_COMPUTE_API
+        ORIG_COMPUTE_API = self.compute_api
+        self.compute_api = compute_cells_api.ComputeCellsAPI()
+
+        def _fake_validate_cell(*args, **kwargs):
+            return
+
+        def _fake_cast_to_cells(self, context, instance, method,
+                                *args, **kwargs):
+            fn = getattr(ORIG_COMPUTE_API, method)
+            fn(context, instance, *args, **kwargs)
+
+        self.stub_out('nova.compute.api.API._validate_cell',
+                      _fake_validate_cell)
+        self.stub_out('nova.compute.cells_api.ComputeCellsAPI._cast_to_cells',
+                      _fake_cast_to_cells)
+
+    def test_unshelve(self):
+        # Ensure instance can be unshelved on cell environment.
+        # The super class tests nova-shelve.
+        instance = self._create_fake_instance_obj()
+
+        self.assertIsNone(instance['task_state'])
+
+        self.compute_api.shelve(self.context, instance)
+
+        instance.task_state = None
+        instance.vm_state = vm_states.SHELVED
+        instance.save()
+
+        self.compute_api.unshelve(self.context, instance)
+
+        self.assertEqual(task_states.UNSHELVING, instance.task_state)
+
+    def tearDown(self):
+        global ORIG_COMPUTE_API
+        self.compute_api = ORIG_COMPUTE_API
+        super(CellsShelveComputeAPITestCase, self).tearDown()
 
 
 class CellsConductorAPIRPCRedirect(test.NoDBTestCase):
