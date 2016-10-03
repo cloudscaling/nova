@@ -1231,6 +1231,20 @@ class LibvirtConnTestCase(test.NoDBTestCase):
 
         mock_guest.set_user_password.assert_called_once_with("root", "123")
 
+    @mock.patch.object(host.Host,
+                       'has_min_version', return_value=True)
+    @mock.patch('nova.virt.libvirt.host.Host.get_guest')
+    def test_set_admin_password_parallels(self, mock_get_guest, ver):
+        self.flags(virt_type='parallels', group='libvirt')
+        instance = objects.Instance(**self.test_instance)
+        mock_guest = mock.Mock(spec=libvirt_guest.Guest)
+        mock_get_guest.return_value = mock_guest
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        drvr.set_admin_password(instance, "123")
+
+        mock_guest.set_user_password.assert_called_once_with("root", "123")
+
     @mock.patch('nova.utils.get_image_from_system_metadata')
     @mock.patch.object(host.Host,
                        'has_min_version', return_value=True)
@@ -1273,13 +1287,15 @@ class LibvirtConnTestCase(test.NoDBTestCase):
     @mock.patch.object(host.Host,
                        'has_min_version', return_value=False)
     def test_set_admin_password_bad_version(self, mock_svc, mock_image):
-        self.flags(virt_type='kvm', group='libvirt')
+
         instance = objects.Instance(**self.test_instance)
         mock_image.return_value = {"properties": {
             "hw_qemu_guest_agent": "yes"}}
-        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
-        self.assertRaises(exception.SetAdminPasswdNotSupported,
-                          drvr.set_admin_password, instance, "123")
+        for hyp in ('kvm', 'parallels'):
+            self.flags(virt_type=hyp, group='libvirt')
+            drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+            self.assertRaises(exception.SetAdminPasswdNotSupported,
+                              drvr.set_admin_password, instance, "123")
 
     @mock.patch('nova.utils.get_image_from_system_metadata')
     @mock.patch.object(host.Host,
@@ -8274,7 +8290,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         dom = fakelibvirt.Domain(drvr._get_connection(), xml, False)
         guest = libvirt_guest.Guest(dom)
-        return_value = drvr._live_migration_copy_disk_paths(context, instance,
+        return_value = drvr._live_migration_copy_disk_paths(self.context,
+                                                            instance,
                                                             guest)
         expected = (['/var/lib/nova/instance/123/disk.root',
                      '/var/lib/nova/instance/123/disk.shared',
@@ -10451,7 +10468,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         self.useFixture(
             fake_imagebackend.ImageBackendFixture(got_files=gotFiles))
 
-        drvr._create_image(context, instance, disk_info['mapping'])
+        drvr._create_image(self.context, instance, disk_info['mapping'])
         drvr._get_guest_xml(self.context, instance, None,
                             disk_info, image_meta)
 
@@ -10519,7 +10536,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                                 instance,
                                                 image_meta)
-            driver._create_image(context, instance, disk_info['mapping'])
+            driver._create_image(self.context, instance, disk_info['mapping'])
 
         # Assert that kernel and ramdisk were fetched with fetch_raw_image
         # and no size
@@ -10527,7 +10544,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             cache = disk.cache
             if name in ('kernel', 'ramdisk'):
                 cache.assert_called_once_with(
-                    context=context, filename=mock.ANY, image_id=mock.ANY,
+                    context=self.context, filename=mock.ANY, image_id=mock.ANY,
                     fetch_func=fake_libvirt_utils.fetch_raw_image)
 
         wantFiles = [
@@ -10579,9 +10596,9 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             got_files=gotFiles, imported_files=imported_files, exists=exists))
 
         if test_create_configdrive:
-            drvr._create_configdrive(context, instance)
+            drvr._create_configdrive(self.context, instance)
         else:
-            drvr._create_image(context, instance, disk_info['mapping'],
+            drvr._create_image(self.context, instance, disk_info['mapping'],
                                suffix=suffix)
         drvr._get_guest_xml(self.context, instance, None,
                             disk_info, image_meta)
@@ -16488,13 +16505,10 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
         self.assertIsNone(disks['disk.rescue'].image_type)
 
         # We expect the generated domain to contain disk.rescue, disk, and
-        # config disk in that order
-        # NOTE(mdbooth): But it doesn't! Config disk is missing.
-        #                See https://bugs.launchpad.net/nova/+bug/1597669
-        #                For now we assert the broken behaviour as a
-        #                placeholder until the fix lands.
+        # disk.config.rescue in that order
         expected_domain_disk_paths = map(
-            lambda name: disks[name].path, ('disk.rescue', 'disk'))
+            lambda name: disks[name].path, ('disk.rescue', 'disk',
+                                            'disk.config.rescue'))
         domain_disk_paths = doc.xpath('devices/disk/source/@file')
         self.assertEqual(expected_domain_disk_paths, domain_disk_paths)
 
