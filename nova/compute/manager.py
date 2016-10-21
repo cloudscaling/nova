@@ -515,7 +515,8 @@ class ComputeManager(manager.Manager):
         self._sync_power_pool = eventlet.GreenPool(
             size=CONF.sync_power_state_pool_size)
         self._syncs_in_progress = {}
-        self.send_instance_updates = CONF.scheduler_tracks_instance_changes
+        self.send_instance_updates = (
+            CONF.filter_scheduler.track_instance_changes)
         if CONF.max_concurrent_builds != 0:
             self._build_semaphore = eventlet.semaphore.Semaphore(
                 CONF.max_concurrent_builds)
@@ -1123,7 +1124,7 @@ class ComputeManager(manager.Manager):
     def init_host(self):
         """Initialization for a standalone compute service."""
 
-        if CONF.pci_passthrough_whitelist:
+        if CONF.pci.passthrough_whitelist:
             # Simply loading the PCI passthrough whitelist will do a bunch of
             # validation that would otherwise wait until the PciDevTracker is
             # constructed when updating available resources for the compute
@@ -1131,7 +1132,7 @@ class ComputeManager(manager.Manager):
             # So load up the whitelist when starting the compute service to
             # flush any invalid configuration early so we can kill the service
             # if the configuration is wrong.
-            whitelist.Whitelist(CONF.pci_passthrough_whitelist)
+            whitelist.Whitelist(CONF.pci.passthrough_whitelist)
 
         self.driver.init_host(host=self.host)
         context = nova.context.get_admin_context()
@@ -3436,6 +3437,7 @@ class ComputeManager(manager.Manager):
             rt = self._get_resource_tracker(migration.source_node)
             rt.drop_move_claim(context, instance, old_instance_type,
                                prefix='old_')
+            instance.drop_migration_context()
 
             # NOTE(mriedem): The old_vm_state could be STOPPED but the user
             # might have manually powered up the instance to confirm the
@@ -3587,6 +3589,7 @@ class ComputeManager(manager.Manager):
                                        network_info,
                                        block_device_info, power_on)
 
+            instance.drop_migration_context()
             instance.launched_at = timeutils.utcnow()
             instance.save(expected_task_state=task_states.RESIZE_REVERTING)
 
@@ -4868,9 +4871,14 @@ class ComputeManager(manager.Manager):
                       instance=instance)
             self.driver.swap_volume(old_cinfo, new_cinfo, instance, mountpoint,
                                     resize_to)
-        except Exception:
+        except Exception as ex:
             failed = True
             with excutils.save_and_reraise_exception():
+                compute_utils.notify_about_volume_swap(
+                    context, instance, self.host,
+                    fields.NotificationAction.VOLUME_SWAP,
+                    fields.NotificationPhase.ERROR,
+                    old_volume_id, new_volume_id, ex)
                 if new_cinfo:
                     msg = _LE("Failed to swap volume %(old_volume_id)s "
                               "for %(new_volume_id)s")
@@ -4914,6 +4922,12 @@ class ComputeManager(manager.Manager):
         """Swap volume for an instance."""
         context = context.elevated()
 
+        compute_utils.notify_about_volume_swap(
+            context, instance, self.host,
+            fields.NotificationAction.VOLUME_SWAP,
+            fields.NotificationPhase.START,
+            old_volume_id, new_volume_id)
+
         bdm = objects.BlockDeviceMapping.get_by_volume_and_instance(
                 context, old_volume_id, instance.uuid)
         connector = self.driver.get_volume_connector(instance)
@@ -4954,6 +4968,12 @@ class ComputeManager(manager.Manager):
                   instance=instance)
         bdm.update(values)
         bdm.save()
+
+        compute_utils.notify_about_volume_swap(
+            context, instance, self.host,
+            fields.NotificationAction.VOLUME_SWAP,
+            fields.NotificationPhase.END,
+            old_volume_id, new_volume_id)
 
     @wrap_exception()
     def remove_volume_connection(self, context, volume_id, instance):
@@ -5175,7 +5195,7 @@ class ComputeManager(manager.Manager):
                                        network_info,
                                        disk,
                                        migrate_data)
-        LOG.debug('driver pre_live_migration data is %s' % migrate_data)
+        LOG.debug('driver pre_live_migration data is %s', migrate_data)
 
         # NOTE(tr3buchet): setup networks on destination host
         self.network_api.setup_networks_on_host(context, instance,
@@ -6169,9 +6189,9 @@ class ComputeManager(manager.Manager):
             # block entire periodic task thread
             uuid = db_instance.uuid
             if uuid in self._syncs_in_progress:
-                LOG.debug('Sync already in progress for %s' % uuid)
+                LOG.debug('Sync already in progress for %s', uuid)
             else:
-                LOG.debug('Triggering sync for uuid %s' % uuid)
+                LOG.debug('Triggering sync for uuid %s', uuid)
                 self._syncs_in_progress[uuid] = True
                 self._sync_power_pool.spawn_n(_sync, db_instance)
 
@@ -6626,6 +6646,10 @@ class ComputeManager(manager.Manager):
             LOG.debug('Processing event %(event)s',
                       {'event': event.key}, instance=instance)
             _event.send(event)
+        else:
+            LOG.warning(_LW('Received unexpected event %(event)s for '
+                            'instance'),
+                        {'event': event.key}, instance=instance)
 
     def _process_instance_vif_deleted_event(self, context, instance,
                                             deleted_vif_id):

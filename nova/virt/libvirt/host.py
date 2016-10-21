@@ -762,7 +762,7 @@ class Host(object):
 
         xml = secret_conf.to_xml()
         try:
-            LOG.debug('Secret XML: %s' % xml)
+            LOG.debug('Secret XML: %s', xml)
             conn = self.get_connection()
             secret = conn.secretDefineXML(xml)
             if password is not None:
@@ -895,10 +895,3 @@ class Host(object):
                 return False
         except IOError:
             return False
-
-    def is_migratable_xml_flag(self):
-        """Determines whether libvirt is supporting dump XML suitable for
-        migration.
-        """
-        return getattr(libvirt, 'VIR_DOMAIN_XML_MIGRATABLE',
-                       None) is not None

@@ -48,6 +48,14 @@ ROUTE_DECLARATIONS = {
     '/': {
         'GET': root.home,
     },
+    # NOTE(cdent): This allows '/placement/' and '/placement' to
+    # both work as the root of the service, which we probably want
+    # for those situations where the service is mounted under a
+    # prefix (as it is in devstack). While weird, an empty string is
+    # a legit key in a dictionary and matches as desired in Routes.
+    '': {
+        'GET': root.home,
+    },
     '/resource_providers': {
         'GET': resource_provider.list_resource_providers,
         'POST': resource_provider.create_resource_provider
@@ -107,7 +115,11 @@ def handle_405(environ, start_response):
     _methods = util.wsgi_path_item(environ, '_methods')
     headers = {}
     if _methods:
-        headers['allow'] = _methods
+        # Ensure allow header is a python 2 or 3 native string (thus
+        # not unicode in python 2 but stay a string in python 3)
+        # In the process done by Routes to save the allowed methods
+        # to its routing table they become unicode in py2.
+        headers['allow'] = str(_methods)
     raise webob.exc.HTTPMethodNotAllowed(
         _('The method specified is not allowed for this resource.'),
         headers=headers, json_formatter=util.json_error_formatter)

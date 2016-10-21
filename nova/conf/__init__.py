@@ -59,7 +59,6 @@ from nova.conf import placement
 from nova.conf import quota
 from nova.conf import rdp
 from nova.conf import remote_debug
-from nova.conf import rpc
 from nova.conf import scaleio
 from nova.conf import scheduler
 from nova.conf import serial_console
@@ -117,8 +116,11 @@ pci.register_opts(CONF)
 placement.register_opts(CONF)
 quota.register_opts(CONF)
 rdp.register_opts(CONF)
+<<<<<<< HEAD
 rpc.register_opts(CONF)
 scaleio.register_opts(CONF)
+=======
+>>>>>>> origin/master
 scheduler.register_opts(CONF)
 serial_console.register_opts(CONF)
 service.register_opts(CONF)

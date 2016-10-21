@@ -30,9 +30,7 @@ from nova import exception
 from nova import objects
 from nova import test
 from nova.tests.unit.db import fakes as db_fakes
-from nova.tests.unit import fake_instance
 from nova.tests.unit.objects import test_network
-from nova.tests.unit import test_flavors
 from nova.tests import uuidsentinel
 
 CONF = conf.CONF
@@ -422,45 +420,6 @@ class ProjectCommandsTestCase(test.TestCase):
             'ram'))
 
 
-class VmCommandsTestCase(test.NoDBTestCase):
-    def setUp(self):
-        super(VmCommandsTestCase, self).setUp()
-        self.output = StringIO()
-        self.useFixture(fixtures.MonkeyPatch('sys.stdout', self.output))
-        self.commands = manage.VmCommands()
-        self.fake_flavor = objects.Flavor(**test_flavors.DEFAULT_FLAVORS[0])
-
-    def test_list_without_host(self):
-        with mock.patch.object(objects.InstanceList, 'get_by_filters') as get:
-            get.return_value = objects.InstanceList(
-                objects=[fake_instance.fake_instance_obj(
-                    context.get_admin_context(), host='foo-host',
-                    flavor=self.fake_flavor,
-                    system_metadata={})])
-            self.commands.list()
-
-        result = self.output.getvalue()
-
-        self.assertIn('node', result)   # check the header line
-        self.assertIn('m1.tiny', result)    # flavor.name
-        self.assertIn('foo-host', result)
-
-    def test_list_with_host(self):
-        with mock.patch.object(objects.InstanceList, 'get_by_host') as get:
-            get.return_value = objects.InstanceList(
-                objects=[fake_instance.fake_instance_obj(
-                    context.get_admin_context(),
-                    flavor=self.fake_flavor,
-                    system_metadata={})])
-            self.commands.list(host='fake-host')
-
-        result = self.output.getvalue()
-
-        self.assertIn('node', result)   # check the header line
-        self.assertIn('m1.tiny', result)    # flavor.name
-        self.assertIn('fake-host', result)
-
-
 class DBCommandsTestCase(test.NoDBTestCase):
     def setUp(self):
         super(DBCommandsTestCase, self).setUp()
@@ -469,16 +428,16 @@ class DBCommandsTestCase(test.NoDBTestCase):
         self.commands = manage.DbCommands()
 
     def test_archive_deleted_rows_negative(self):
-        self.assertEqual(1, self.commands.archive_deleted_rows(-1))
+        self.assertEqual(2, self.commands.archive_deleted_rows(-1))
 
     def test_archive_deleted_rows_large_number(self):
         large_number = '1' * 100
-        self.assertEqual(1, self.commands.archive_deleted_rows(large_number))
+        self.assertEqual(2, self.commands.archive_deleted_rows(large_number))
 
     @mock.patch.object(db, 'archive_deleted_rows',
                        return_value=dict(instances=10, consoles=5))
     def _test_archive_deleted_rows(self, mock_db_archive, verbose=False):
-        self.commands.archive_deleted_rows(20, verbose=verbose)
+        result = self.commands.archive_deleted_rows(20, verbose=verbose)
         mock_db_archive.assert_called_once_with(20)
         output = self.output.getvalue()
         if verbose:
@@ -493,6 +452,7 @@ class DBCommandsTestCase(test.NoDBTestCase):
             self.assertEqual(expected, output)
         else:
             self.assertEqual(0, len(output))
+        self.assertEqual(1, result)
 
     def test_archive_deleted_rows(self):
         # Tests that we don't show any table output (not verbose).
@@ -502,12 +462,77 @@ class DBCommandsTestCase(test.NoDBTestCase):
         # Tests that we get table output.
         self._test_archive_deleted_rows(verbose=True)
 
+    @mock.patch.object(db, 'archive_deleted_rows')
+    def test_archive_deleted_rows_until_complete(self, mock_db_archive,
+                                                 verbose=False):
+        mock_db_archive.side_effect = [
+            {'instances': 10, 'instance_extra': 5},
+            {'instances': 5, 'instance_faults': 1},
+            {}]
+        result = self.commands.archive_deleted_rows(20, verbose=verbose,
+                                                    until_complete=True)
+        self.assertEqual(1, result)
+        if verbose:
+            expected = """\
+Archiving.....complete
++-----------------+-------------------------+
+| Table           | Number of Rows Archived |
++-----------------+-------------------------+
+| instance_extra  | 5                       |
+| instance_faults | 1                       |
+| instances       | 15                      |
++-----------------+-------------------------+
+"""
+        else:
+            expected = ''
+
+        self.assertEqual(expected, self.output.getvalue())
+        mock_db_archive.assert_has_calls([mock.call(20),
+                                          mock.call(20),
+                                          mock.call(20)])
+
+    def test_archive_deleted_rows_until_complete_quiet(self):
+        self.test_archive_deleted_rows_until_complete(verbose=False)
+
+    @mock.patch.object(db, 'archive_deleted_rows')
+    def test_archive_deleted_rows_until_stopped(self, mock_db_archive,
+                                                verbose=True):
+        mock_db_archive.side_effect = [
+            {'instances': 10, 'instance_extra': 5},
+            {'instances': 5, 'instance_faults': 1},
+            KeyboardInterrupt]
+        result = self.commands.archive_deleted_rows(20, verbose=verbose,
+                                                    until_complete=True)
+        self.assertEqual(1, result)
+        if verbose:
+            expected = """\
+Archiving.....stopped
++-----------------+-------------------------+
+| Table           | Number of Rows Archived |
++-----------------+-------------------------+
+| instance_extra  | 5                       |
+| instance_faults | 1                       |
+| instances       | 15                      |
++-----------------+-------------------------+
+"""
+        else:
+            expected = ''
+
+        self.assertEqual(expected, self.output.getvalue())
+        mock_db_archive.assert_has_calls([mock.call(20),
+                                          mock.call(20),
+                                          mock.call(20)])
+
+    def test_archive_deleted_rows_until_stopped_quiet(self):
+        self.test_archive_deleted_rows_until_stopped(verbose=False)
+
     @mock.patch.object(db, 'archive_deleted_rows', return_value={})
     def test_archive_deleted_rows_verbose_no_results(self, mock_db_archive):
-        self.commands.archive_deleted_rows(20, verbose=True)
+        result = self.commands.archive_deleted_rows(20, verbose=True)
         mock_db_archive.assert_called_once_with(20)
         output = self.output.getvalue()
         self.assertIn('Nothing was archived.', output)
+        self.assertEqual(0, result)
 
     @mock.patch.object(migration, 'db_null_instance_uuid_scan',
                        return_value={'foo': 0})

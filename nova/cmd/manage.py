@@ -708,55 +708,6 @@ class NetworkCommands(object):
         db.network_update(admin_context, network['id'], net)
 
 
-class VmCommands(object):
-    """Class for managing VM instances."""
-
-    description = ('DEPRECATED: Use the nova list command from '
-                   'python-novaclient instead. The vm subcommand will be '
-                   'removed in the 15.0.0 Ocata release.')
-
-    @args('--host', metavar='<host>', help='Host')
-    def list(self, host=None):
-        """DEPRECATED: Show a list of all instances."""
-
-        print(("%-10s %-15s %-10s %-10s %-26s %-9s %-9s %-9s"
-               "  %-10s %-10s %-10s %-5s" % (_('instance'),
-                                             _('node'),
-                                             _('type'),
-                                             _('state'),
-                                             _('launched'),
-                                             _('image'),
-                                             _('kernel'),
-                                             _('ramdisk'),
-                                             _('project'),
-                                             _('user'),
-                                             _('zone'),
-                                             _('index'))))
-
-        if host is None:
-            instances = objects.InstanceList.get_by_filters(
-                context.get_admin_context(), {}, expected_attrs=['flavor'])
-        else:
-            instances = objects.InstanceList.get_by_host(
-                context.get_admin_context(), host, expected_attrs=['flavor'])
-
-        for instance in instances:
-            instance_type = instance.get_flavor()
-            print(("%-10s %-15s %-10s %-10s %-26s %-9s %-9s %-9s"
-                   " %-10s %-10s %-10s %-5d" % (instance.display_name,
-                                                instance.host,
-                                                instance_type.name,
-                                                instance.vm_state,
-                                                instance.launched_at,
-                                                instance.image_ref,
-                                                instance.kernel_id,
-                                                instance.ramdisk_id,
-                                                instance.project_id,
-                                                instance.user_id,
-                                                instance.availability_zone,
-                                                instance.launch_index or 0)))
-
-
 class HostCommands(object):
     """List hosts."""
 
@@ -784,14 +735,23 @@ class DbCommands(object):
     """Class for managing the main database."""
 
     online_migrations = (
+        # Added in Mitaka
         db.aggregate_uuids_online_data_migration,
+        # Added in Newton
         flavor_obj.migrate_flavors,
+        # Added in Newton
         flavor_obj.migrate_flavor_reset_autoincrement,
+        # Added in Newton
         instance_obj.migrate_instance_keypairs,
+        # Added in Newton
         request_spec.migrate_instances_add_request_spec,
+        # Added in Newton
         keypair_obj.migrate_keypairs_to_api_db,
+        # Added in Newton
         aggregate_obj.migrate_aggregates,
+        # Added in Newton
         aggregate_obj.migrate_aggregate_reset_autoincrement,
+        # Added in Newton
         instance_group_obj.migrate_instance_groups_to_api_db,
     )
 
@@ -825,30 +785,61 @@ class DbCommands(object):
         """Print the current database version."""
         print(migration.db_version())
 
-    @args('--max_rows', metavar='<number>',
+    @args('--max_rows', metavar='<number>', default=1000,
             help='Maximum number of deleted rows to archive')
     @args('--verbose', action='store_true', dest='verbose', default=False,
           help='Print how many rows were archived per table.')
-    def archive_deleted_rows(self, max_rows, verbose=False):
-        """Move up to max_rows deleted rows from production tables to shadow
-        tables.
+    @args('--until-complete', action='store_true', dest='until_complete',
+          default=False,
+          help=('Run continuously until all deleted rows are archived. Use '
+                'max_rows as a batch size for each iteration.'))
+    def archive_deleted_rows(self, max_rows, verbose=False,
+                             until_complete=False):
+        """Move deleted rows from production tables to shadow tables.
+
+        Returns 0 if nothing was archived, 1 if some number of rows were
+        archived, 2 if max_rows is invalid. If automating, this should be
+        run continuously while the result is 1, stopping at 0.
         """
-        if max_rows is not None:
-            max_rows = int(max_rows)
-            if max_rows < 0:
-                print(_("Must supply a positive value for max_rows"))
-                return(1)
-            if max_rows > db.MAX_INT:
-                print(_('max rows must be <= %(max_value)d') %
-                      {'max_value': db.MAX_INT})
-                return(1)
-        table_to_rows_archived = db.archive_deleted_rows(max_rows)
+        max_rows = int(max_rows)
+        if max_rows < 0:
+            print(_("Must supply a positive value for max_rows"))
+            return(2)
+        if max_rows > db.MAX_INT:
+            print(_('max rows must be <= %(max_value)d') %
+                  {'max_value': db.MAX_INT})
+            return(2)
+
+        table_to_rows_archived = {}
+        if until_complete and verbose:
+            sys.stdout.write(_('Archiving') + '..')  # noqa
+        while True:
+            try:
+                run = db.archive_deleted_rows(max_rows)
+            except KeyboardInterrupt:
+                run = {}
+                if until_complete and verbose:
+                    print('.' + _('stopped'))  # noqa
+                    break
+            for k, v in run.items():
+                table_to_rows_archived.setdefault(k, 0)
+                table_to_rows_archived[k] += v
+            if not until_complete:
+                break
+            elif not run:
+                if verbose:
+                    print('.' + _('complete'))  # noqa
+                break
+            if verbose:
+                sys.stdout.write('.')
         if verbose:
             if table_to_rows_archived:
                 utils.print_dict(table_to_rows_archived, _('Table'),
                                  dict_value=_('Number of Rows Archived'))
             else:
                 print(_('Nothing was archived.'))
+        # NOTE(danms): Return nonzero if we archived something
+        return int(bool(table_to_rows_archived))
 
     @args('--delete', action='store_true', dest='delete',
           help='If specified, automatically delete any records found where '
@@ -1551,7 +1542,6 @@ CATEGORIES = {
     'network': NetworkCommands,
     'project': ProjectCommands,
     'shell': ShellCommands,
-    'vm': VmCommands,
     'vpn': VpnCommands,
 }
 
@@ -1569,25 +1559,11 @@ category_opt = cfg.SubCommandOpt('category',
 def main():
     """Parse options and call the appropriate class/method."""
     CONF.register_cli_opt(category_opt)
-    try:
-        config.parse_args(sys.argv)
-        logging.set_defaults(
-            default_log_levels=logging.get_default_log_levels() +
-            _EXTRA_DEFAULT_LOG_LEVELS)
-        logging.setup(CONF, "nova")
-    except cfg.ConfigFilesNotFoundError:
-        cfgfile = CONF.config_file[-1] if CONF.config_file else None
-        if cfgfile and not os.access(cfgfile, os.R_OK):
-            st = os.stat(cfgfile)
-            print(_("Could not read %s. Re-running with sudo") % cfgfile)
-            try:
-                os.execvp('sudo', ['sudo', '-u', '#%s' % st.st_uid] + sys.argv)
-            except OSError:
-                print(_('sudo failed, continuing as if nothing happened'))
-
-        print(_('Please re-run nova-manage as root.'))
-        return(2)
-
+    config.parse_args(sys.argv)
+    logging.set_defaults(
+        default_log_levels=logging.get_default_log_levels() +
+        _EXTRA_DEFAULT_LOG_LEVELS)
+    logging.setup(CONF, "nova")
     objects.register_all()
 
     if CONF.category.name == "version":

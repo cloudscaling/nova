@@ -209,9 +209,6 @@ class HackingTestCase(test.NoDBTestCase):
             "self.assertTrue(A in 'some string with spaces')"))), 1)
 
         self.assertEqual(len(list(checks.assert_true_or_false_with_in(
-            "self.assertTrue(A in 'some string with spaces')"))), 1)
-
-        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
             "self.assertTrue(A in ['1', '2', '3'])"))), 1)
 
         self.assertEqual(len(list(checks.assert_true_or_false_with_in(
@@ -627,17 +624,21 @@ class HackingTestCase(test.NoDBTestCase):
         self._assert_has_no_errors(code,
                                    checks.check_config_option_in_central_place,
                                    filename="nova/conf/serial_console.py")
-        # option at a location which is not in scope right now
-        # TODO(markus_z): This is temporary until all config options are
-        # moved to /nova/conf
-        self._assert_has_no_errors(code,
-                                   checks.check_config_option_in_central_place,
-                                   filename="nova/dummy/non_existent.py")
         # option at the wrong place in the tree
         self._assert_has_errors(code,
                                 checks.check_config_option_in_central_place,
                                 filename="nova/cmd/serialproxy.py",
                                 expected_errors=errors)
+
+        # option at a location which is marked as an exception
+        # TODO(macsz) remove testing exceptions as they are removed from
+        # check_config_option_in_central_place
+        self._assert_has_no_errors(code,
+                                   checks.check_config_option_in_central_place,
+                                   filename="nova/cmd/manage.py")
+        self._assert_has_no_errors(code,
+                                   checks.check_config_option_in_central_place,
+                                   filename="nova/tests/dummy_test.py")
 
     def test_check_doubled_words(self):
         errors = [(1, 0, "N343")]
@@ -791,3 +792,88 @@ class HackingTestCase(test.NoDBTestCase):
                             instance=instance)
                """
         self._assert_has_no_errors(code, checks.check_context_log)
+
+    def test_check_delayed_string_interpolation(self):
+        checker = checks.check_delayed_string_interpolation
+        code = """
+               msg_w = _LW('Test string (%s)')
+               msg_i = _LI('Test string (%s)')
+               value = 'test'
+
+               LOG.error(_LE("Test string (%s)") % value)
+               LOG.warning(msg_w % 'test%string')
+               LOG.info(msg_i %
+                        "test%string%info")
+               LOG.critical(
+                   _LC('Test string (%s)') % value,
+                   instance=instance)
+               LOG.exception(_LE(" 'Test quotation %s' \"Test\"") % 'test')
+               LOG.debug(' "Test quotation %s" \'Test\'' % "test")
+               LOG.debug('Tesing %(test)s' %
+                         {'test': ','.join(
+                             ['%s=%s' % (name, value)
+                              for name, value in test.items()])})
+               """
+
+        expected_errors = [(5, 34, 'N354'), (6, 18, 'N354'), (7, 15, 'N354'),
+                           (10, 28, 'N354'), (12, 49, 'N354'),
+                           (13, 40, 'N354'), (14, 28, 'N354')]
+        self._assert_has_errors(code, checker, expected_errors=expected_errors)
+        self._assert_has_no_errors(code, checker,
+                                   filename='nova/tests/unit/test_hacking.py')
+
+        code = """
+               msg_w = _LW('Test string (%s)')
+               msg_i = _LI('Test string (%s)')
+               value = 'test'
+
+               LOG.error(_LE("Test string (%s)"), value)
+               LOG.error(_LE("Test string (%s)") % value) # noqa
+               LOG.warning(msg_w, 'test%string')
+               LOG.info(msg_i,
+                        "test%string%info")
+               LOG.critical(
+                   _LC('Test string (%s)'), value,
+                   instance=instance)
+               LOG.exception(_LE(" 'Test quotation %s' \"Test\""), 'test')
+               LOG.debug(' "Test quotation %s" \'Test\'', "test")
+               LOG.debug('Tesing %(test)s',
+                         {'test': ','.join(
+                             ['%s=%s' % (name, value)
+                              for name, value in test.items()])})
+               """
+        self._assert_has_no_errors(code, checker)
+
+    def test_no_assert_equal_true_false(self):
+        code = """
+                  self.assertEqual(context_is_admin, True)
+                  self.assertEqual(context_is_admin, False)
+                  self.assertEqual(True, context_is_admin)
+                  self.assertEqual(False, context_is_admin)
+                  self.assertNotEqual(context_is_admin, True)
+                  self.assertNotEqual(context_is_admin, False)
+                  self.assertNotEqual(True, context_is_admin)
+                  self.assertNotEqual(False, context_is_admin)
+               """
+        errors = [(1, 0, 'N355'), (2, 0, 'N355'), (3, 0, 'N355'),
+                  (4, 0, 'N355'), (5, 0, 'N355'), (6, 0, 'N355'),
+                  (7, 0, 'N355'), (8, 0, 'N355')]
+        self._assert_has_errors(code, checks.no_assert_equal_true_false,
+                                expected_errors=errors)
+        code = """
+                  self.assertEqual(context_is_admin, stuff)
+                  self.assertNotEqual(context_is_admin, stuff)
+               """
+        self._assert_has_no_errors(code, checks.no_assert_equal_true_false)
+
+    def test_no_assert_true_false_is_not(self):
+        code = """
+                  self.assertTrue(test is None)
+                  self.assertTrue(False is my_variable)
+                  self.assertFalse(None is test)
+                  self.assertFalse(my_variable is False)
+               """
+        errors = [(1, 0, 'N356'), (2, 0, 'N356'), (3, 0, 'N356'),
+                  (4, 0, 'N356')]
+        self._assert_has_errors(code, checks.no_assert_true_false_is_not,
+                                expected_errors=errors)

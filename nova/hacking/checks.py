@@ -105,6 +105,9 @@ doubled_words_re = re.compile(
     r"\b(then?|[iao]n|i[fst]|but|f?or|at|and|[dt]o)\s+\1\b")
 log_remove_context = re.compile(
     r"(.)*LOG\.(.*)\(.*(context=[_a-zA-Z0-9].*)+.*\)")
+log_string_interpolation = re.compile(r".*LOG\.(error|warning|info"
+                                      r"|critical|exception|debug)"
+                                      r"\([^,]*%[^,]*[,)]")
 
 
 class BaseASTChecker(ast.NodeVisitor):
@@ -660,17 +663,21 @@ def check_config_option_in_central_place(logical_line, filename):
     # That's the correct location
     if "nova/conf/" in filename:
         return
-    # TODO(markus_z) This is just temporary until all config options are
-    # moved to the central place. To avoid that a once cleaned up place
-    # introduces new config options, we do a check here. This array will
-    # get quite huge over the time, but will be removed at the end of the
-    # reorganization.
-    # You can add the full path to a module or folder. It's just a substring
-    # check, which makes it flexible enough.
-    cleaned_up = ["nova/console/serial.py",
-                  "nova/cmd/serialproxy.py",
-                  ]
-    if not any(c in filename for c in cleaned_up):
+
+    # (macsz) All config options (with exceptions that are clarified
+    # in the list below) were moved to the central place. List below is for
+    # all options that were impossible to move without doing a major impact
+    # on code. Add full path to a module or folder.
+    conf_exceptions = [
+        # CLI opts are allowed to be outside of nova/conf directory
+        'nova/cmd/manage.py',
+        'nova/cmd/policy_check.py',
+        # config options should not be declared in tests, but there is
+        # another checker for it (N320)
+        'nova/tests',
+    ]
+
+    if any(f in filename for f in conf_exceptions):
         return
 
     if cfg_opt_re.match(logical_line):
@@ -794,6 +801,61 @@ def check_context_log(logical_line, physical_line, filename):
               "kwarg.")
 
 
+def check_delayed_string_interpolation(logical_line, physical_line, filename):
+    """Check whether string interpolation is delayed at logging calls
+
+    Not correct: LOG.debug('Example: %s' % 'bad')
+    Correct:     LOG.debug('Example: %s', 'good')
+
+    N354
+    """
+    if "nova/tests" in filename:
+        return
+
+    if pep8.noqa(physical_line):
+        return
+
+    if log_string_interpolation.match(logical_line):
+        yield(logical_line.index('%'),
+              "N354: String interpolation should be delayed to be "
+              "handled by the logging code, rather than being done "
+              "at the point of the logging call. "
+              "Use ',' instead of '%'.")
+
+
+def no_assert_equal_true_false(logical_line):
+    """Enforce use of assertTrue/assertFalse.
+
+    Prevent use of assertEqual(A, True|False), assertEqual(True|False, A),
+    assertNotEqual(A, True|False), and assertNotEqual(True|False, A).
+
+    N355
+    """
+    _start_re = re.compile(r'assert(Not)?Equal\((True|False),')
+    _end_re = re.compile(r'assert(Not)?Equal\(.*,\s+(True|False)\)$')
+
+    if _start_re.search(logical_line) or _end_re.search(logical_line):
+        yield (0, "N355: assertEqual(A, True|False), "
+               "assertEqual(True|False, A), assertNotEqual(A, True|False), "
+               "or assertEqual(True|False, A) sentences must not be used. "
+               "Use assertTrue(A) or assertFalse(A) instead")
+
+
+def no_assert_true_false_is_not(logical_line):
+    """Enforce use of assertIs/assertIsNot.
+
+    Prevent use of assertTrue(A is|is not B) and assertFalse(A is|is not B).
+
+    N356
+    """
+    _re = re.compile(r'assert(True|False)\(.+\s+is\s+(not\s+)?.+\)$')
+
+    if _re.search(logical_line):
+        yield (0, "N356: assertTrue(A is|is not B) or "
+               "assertFalse(A is|is not B) sentences must not be used. "
+               "Use assertIs(A, B) or assertIsNot(A, B) instead")
+
+
 def factory(register):
     register(import_no_db_in_virt)
     register(no_db_session_in_public_api)
@@ -834,3 +896,6 @@ def factory(register):
     register(no_log_warn)
     register(CheckForUncalledTestClosure)
     register(check_context_log)
+    register(check_delayed_string_interpolation)
+    register(no_assert_equal_true_false)
+    register(no_assert_true_false_is_not)

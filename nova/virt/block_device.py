@@ -14,7 +14,6 @@
 
 import functools
 import itertools
-import operator
 
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
@@ -509,14 +508,17 @@ def attach_block_devices(block_device_mapping, *attach_args, **attach_kwargs):
 
         bdm.attach(*attach_args, **attach_kwargs)
 
-    map(_log_and_attach, block_device_mapping)
+    for device in block_device_mapping:
+        _log_and_attach(device)
     return block_device_mapping
 
 
 def refresh_conn_infos(block_device_mapping, *refresh_args, **refresh_kwargs):
-    map(operator.methodcaller('refresh_connection_info',
-                              *refresh_args, **refresh_kwargs),
-        block_device_mapping)
+    for device in block_device_mapping:
+        # NOTE(lyarwood): At present only DriverVolumeBlockDevice derived
+        # devices provide a refresh_connection_info method.
+        if hasattr(device, 'refresh_connection_info'):
+            device.refresh_connection_info(*refresh_args, **refresh_kwargs)
     return block_device_mapping
 
 

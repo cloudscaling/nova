@@ -85,6 +85,12 @@ console_id:
   in: path
   required: true
   type: string
+console_token:
+  description: |
+    Console authentication token.
+  in: path
+  required: true
+  type: string
 disabled_reason:
   description: |
     The reason for disabling a service.
@@ -3360,7 +3366,7 @@ period_ending:
 personality:
   description: |
     The file path and contents, text only, to inject into the server at launch. The
-    maximum size of the file path data is 255 bytes. The maximum limit is The number
+    maximum size of the file path data is 255 bytes. The maximum limit is the number
     of allowed bytes in the decoded, rather than encoded, data.
   in: body
   required: false
@@ -3409,6 +3415,12 @@ port_id_resp:
   in: body
   required: true
   type: string
+port_number:
+  description: |
+    The port number.
+  in: body
+  required: true
+  type: integer
 port_state:
   description: |
     The port state.
@@ -4002,6 +4014,18 @@ snapshot:
   in: body
   required: true
   type: object
+snapshot_description:
+  description: |
+    The snapshot description.
+  in: body
+  required: true
+  type: string
+snapshot_description_optional:
+  description: |
+    The snapshot description.
+  in: body
+  required: false
+  type: string
 snapshot_id:
   description: |
     The UUID for a snapshot.
@@ -4011,6 +4035,18 @@ snapshot_id:
 snapshot_id_optional:
   description: |
     The UUID for a snapshot.
+  in: body
+  required: false
+  type: string
+snapshot_name:
+  description: |
+    The snapshot name.
+  in: body
+  required: true
+  type: string
+snapshot_name_optional:
+  description: |
+    The snapshot name.
   in: body
   required: false
   type: string
