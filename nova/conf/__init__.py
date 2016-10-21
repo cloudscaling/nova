@@ -116,11 +116,7 @@ pci.register_opts(CONF)
 placement.register_opts(CONF)
 quota.register_opts(CONF)
 rdp.register_opts(CONF)
-<<<<<<< HEAD
-rpc.register_opts(CONF)
 scaleio.register_opts(CONF)
-=======
->>>>>>> origin/master
 scheduler.register_opts(CONF)
 serial_console.register_opts(CONF)
 service.register_opts(CONF)
