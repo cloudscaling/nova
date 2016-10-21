@@ -222,9 +222,7 @@ class Image(object):
             self.connect_disk()
 
         if size:
-            # create_image() only creates the base image if needed, so
-            # we cannot rely on it to exist here
-            if os.path.exists(base) and size > self.get_disk_size(base):
+            if size > self.get_disk_size(self.path):
                 self.resize_image(size)
 
             if (self.preallocate and self._can_fallocate() and
