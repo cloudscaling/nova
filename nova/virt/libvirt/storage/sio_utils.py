@@ -45,6 +45,8 @@ PROVISIONING_TYPE_KEY = 'sio:provisioning_type'
 PROVISIONING_TYPES_MAP = {'thin': 'ThinProvisioned',
                           'thick': 'ThickProvisioned'}
 
+_sdc_guid = None
+
 
 def verify_volume_size(requested_size):
     """Verify that ScaleIO can have a volume with specified size.
@@ -139,6 +141,19 @@ def _uuid_to_base64(uuid):
     return encoded_name
 
 
+def _get_sdc_guid():
+    global _sdc_guid
+    if not _sdc_guid:
+        if CONF.scaleio.default_sdcguid:
+            _sdc_guid = CONF.scaleio.default_sdcguid
+        else:
+            (out, _err) = utils.execute('drv_cfg', '--query_guid',
+                                        run_as_root=True)
+            LOG.info('Acquire ScaleIO SDC guid %s', out)
+            _sdc_guid = out
+    return _sdc_guid
+
+
 class SIODriver(object):
     """Backend image type driver for ScaleIO"""
 
@@ -212,7 +227,7 @@ class SIODriver(object):
         """
         vol_id = self.get_volume_id(name)
         try:
-            self.ioctx.attach_volume(vol_id, CONF.scaleio.default_sdcguid)
+            self.ioctx.attach_volume(vol_id, _get_sdc_guid())
         except siolib.VolumeAlreadyMapped:
             pass
         return self.ioctx.get_volumepath(vol_id)
@@ -226,7 +241,7 @@ class SIODriver(object):
         :return: Nothing
         """
         try:
-            self.ioctx.detach_volume(name, CONF.scaleio.default_sdcguid)
+            self.ioctx.detach_volume(name, _get_sdc_guid())
         except (siolib.VolumeNotMapped, siolib.VolumeNotFound):
             pass
 
