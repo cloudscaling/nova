@@ -19,6 +19,7 @@ import binascii
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_service import loopingcall
 from oslo_utils import excutils
 from oslo_utils import units
 import six
@@ -44,6 +45,8 @@ STORAGE_POOL_KEY = 'sio:sp_name'
 PROVISIONING_TYPE_KEY = 'sio:provisioning_type'
 PROVISIONING_TYPES_MAP = {'thin': 'ThinProvisioned',
                           'thick': 'ThickProvisioned'}
+NEW_SIZE_CHECK_INTERVAL = 1
+MAX_NEW_SIZE_CHECKS = 10
 
 _sdc_guid = None
 
@@ -337,7 +340,28 @@ class SIODriver(object):
         :param new_size: Size of the volume to extend to
         :return: Nothing
         """
-        self.ioctx.extend_volume(name, new_size / units.Gi)
+        vol_id = self.ioctx.get_volumeid(name)
+        self.ioctx.extend_volume(vol_id, new_size / units.Gi)
+        # Wait for new size delivered to host. Otherwise libvirt will provide
+        # old size to guest.
+        vol_path = self.ioctx.get_volumepath(vol_id)
+        if vol_path:
+
+            @loopingcall.RetryDecorator(max_retry_count=MAX_NEW_SIZE_CHECKS,
+                                        max_sleep_time=NEW_SIZE_CHECK_INTERVAL,
+                                        exceptions=exception.ResizeError)
+            def wait_for_new_size():
+                out, _err = utils.execute('blockdev', '--getsize64', vol_path,
+                                          run_as_root=True)
+                if int(out) != new_size:
+                    raise exception.ResizeError(
+                        reason='Size of mapped volume is not changed')
+
+            try:
+                wait_for_new_size()
+            except exception.ResizeError:
+                LOG.warning('Host system could not get new size of disk %s',
+                            name)
 
     def move_volume(self, name, extra_specs, orig_extra_specs):
         """Move a volume to another protection domain or storage pool.
