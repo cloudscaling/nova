@@ -177,8 +177,9 @@ class SIODriver(object):
         """Return the total storage pool info."""
 
         used_bytes, total_bytes, free_bytes = (
-            self.ioctx.storagepool_size(CONF.scaleio.protection_domain_name,
-                                        CONF.scaleio.storage_pool_name))
+            self.ioctx.storagepool_size(
+                CONF.scaleio.default_protection_domain_name,
+                CONF.scaleio.default_storage_pool_name))
         return {'total': total_bytes,
                 'free': free_bytes,
                 'used': used_bytes}
@@ -192,13 +193,23 @@ class SIODriver(object):
         :return: Nothing
         """
         pd_name = extra_specs.get(PROTECTION_DOMAIN_KEY,
-                                  CONF.scaleio.protection_domain_name
+                                  CONF.scaleio.default_protection_domain_name
                                   ).encode('utf8')
         sp_name = extra_specs.get(STORAGE_POOL_KEY,
-                                  CONF.scaleio.storage_pool_name
+                                  CONF.scaleio.default_storage_pool_name
                                   ).encode('utf8')
         ptype = extra_specs.get(PROVISIONING_TYPE_KEY,
-                                CONF.scaleio.provisioning_type)
+                                CONF.scaleio.default_provisioning_type)
+        if ptype in ['ThickProvisioned', 'ThinProvisioned']:
+            opt_source = ('flavor' if extra_specs.get(PROVISIONING_TYPE_KEY)
+                          else 'config')
+            value_to_use = {'ThickProvisioned': 'thick',
+                            'ThinProvisioned': 'thin'}[ptype]
+            LOG.warning(
+                "Deprecated provisioning type '%s' is specified in %s. "
+                "Please change the value to '%s', because it will not be "
+                "supported in next Nova releases.",
+                ptype, opt_source, value_to_use)
         ptype = PROVISIONING_TYPES_MAP.get(ptype, ptype)
         self.ioctx.create_volume(name, pd_name, sp_name, ptype,
                                  size / units.Gi)

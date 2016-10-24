@@ -19,6 +19,18 @@ sio_group = cfg.OptGroup(
     name='scaleio', title='ScaleIO ephemeral backend configuration values')
 
 sio_opts = [
+    # All deprecated things are added to keep backward compatibility with
+    # deployments based on
+    # https://github.com/codedellemc/nova-scaleio-ephemeral,
+    # which deployments might be deployed via
+    # Fuel (EMC - ScaleIO Fuel Plugin,
+    # https://github.com/openstack/fuel-plugin-scaleio),
+    # JuJu (JuJu Charms for ScaleIO,
+    # https://github.com/codedellemc/juju-scaleio),
+    # Puppet (ScaleIO for OpenStack plugin,
+    # https://forge.puppet.com/cloudscaling/scaleio_openstack).
+    # These things will be removed after the first Nova release with ScaleIO
+    # ephemeral support.
     cfg.StrOpt('rest_server_ip',
                help='The ScaleIO gateway ip address.'),
     cfg.IntOpt('rest_server_port',
@@ -35,13 +47,17 @@ sio_opts = [
                help='Server certificate path.'),
     cfg.StrOpt('default_sdcguid',
                help='The ScaleIO default SDC guid to use (test use only)'),
-    cfg.StrOpt('protection_domain_name',
+    cfg.StrOpt('default_protection_domain_name',
+               deprecated_name='protection_domain_name',
                help='The ScaleIO default protection domain'),
-    cfg.StrOpt('storage_pool_name',
+    cfg.StrOpt('default_storage_pool_name',
+               deprecated_name='storage_pool_name',
                help='The ScaleIO default storage pool'),
-    cfg.StrOpt('provisioning_type',
+    cfg.StrOpt('default_provisioning_type',
+               deprecated_name='provisioning_type',
                default='thick',
                choices=('thick', 'thin',
+                        # These choices are DEPRECATED.
                         'ThickProvisioned', 'ThinProvisioned'),
                help='Default ScaleIO volume provisioning type.'),
 ]
