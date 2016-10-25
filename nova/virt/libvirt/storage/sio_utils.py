@@ -231,12 +231,14 @@ class SIODriver(object):
         except siolib.VolumeNotFound:
             pass
 
-    def map_volume(self, name):
+    def map_volume(self, name, with_no_wait=False):
         """Connect to ScaleIO volume.
 
         Map ScaleIO volume to local block device
 
         :param name: String ScaleIO volume name to attach
+        :param with_no_wait: Whether wait for the volume occures in host
+                             device list
         :return: Local attached volume path
         """
         vol_id = self.get_volume_id(name)
@@ -244,7 +246,7 @@ class SIODriver(object):
             self.ioctx.attach_volume(vol_id, _get_sdc_guid())
         except siolib.VolumeAlreadyMapped:
             pass
-        return self.ioctx.get_volumepath(vol_id)
+        return self.ioctx.get_volumepath(vol_id, with_no_wait=with_no_wait)
 
     def unmap_volume(self, name):
         """Disconnect from ScaleIO volume.
@@ -439,7 +441,7 @@ class SIODriver(object):
         prefix = _uuid_to_base64(instance.uuid)
         volumes = (vol for vol in volumes if vol.startswith(prefix))
         for volume in volumes:
-            self.map_volume(volume)
+            self.map_volume(volume, with_no_wait=True)
 
     def cleanup_volumes(self, instance, unmap_only=False):
         """Cleanup all instance volumes.
