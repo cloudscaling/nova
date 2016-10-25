@@ -346,7 +346,7 @@ class SIODriver(object):
         self.ioctx.extend_volume(vol_id, new_size / units.Gi)
         # Wait for new size delivered to host. Otherwise libvirt will provide
         # old size to guest.
-        vol_path = self.ioctx.get_volumepath(vol_id)
+        vol_path = self.ioctx.get_volumepath(vol_id, with_no_wait=True)
         if vol_path:
 
             @loopingcall.RetryDecorator(max_retry_count=MAX_NEW_SIZE_CHECKS,
