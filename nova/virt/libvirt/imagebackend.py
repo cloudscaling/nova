@@ -1119,10 +1119,6 @@ class Sio(Image):
         else:
             self.volume_name = sio_utils.get_sio_volume_name(instance,
                                                              disk_name)
-            if self.driver.check_volume_exists(self.volume_name):
-                path = self.driver.get_volume_path(self.volume_name)
-            else:
-                path = None
 
         super(Sio, self).__init__(path, "block", "raw", is_block_dev=True)
 
@@ -1137,6 +1133,15 @@ class Sio(Image):
     @staticmethod
     def disconnect_disks(instance):
         sio_utils.SIODriver().cleanup_volumes(instance, unmap_only=True)
+
+    def ensure_path(self):
+        if self.path is None:
+            try:
+                self.path = self.driver.get_volume_path(self.volume_name)
+            except Exception:
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_LE('Disk volume %s is not connected'),
+                              self.volume_name)
 
     def is_rescuer(self):
         return sio_utils.is_sio_volume_rescuer(self.volume_name)
@@ -1189,9 +1194,7 @@ class Sio(Image):
 
     def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
                      extra_specs, hypervisor_version):
-        if self.path is None:
-            raise exception.NovaException(
-                _('Disk volume %s is not connected') % self.volume_name)
+        self.ensure_path()
 
         info = super(Sio, self).libvirt_info(
             disk_bus, disk_dev, device_type, cache_mode,
@@ -1205,6 +1208,7 @@ class Sio(Image):
         return info
 
     def snapshot_extract(self, target, out_format):
+        self.ensure_path()
         self.driver.export_image(self.path, target, out_format)
 
     def resize_image(self, size):
