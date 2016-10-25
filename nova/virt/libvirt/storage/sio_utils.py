@@ -385,7 +385,7 @@ class SIODriver(object):
         try:
             new_path = self.map_volume(tmp_name)
             vol_id = self.get_volume_id(name)
-            old_path = self.ioctx.get_volumepath(vol_id)
+            old_path = self.ioctx.get_volumepath(vol_id, with_no_wait=True)
             if old_path:
                 mapped = True
             else:
