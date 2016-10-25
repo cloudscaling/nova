@@ -392,9 +392,6 @@ class SIODriver(object):
                 mapped = False
                 self.ioctx.attach_volume(vol_id)
                 old_path = self.ioctx.get_volumepath(vol_id)
-                if not old_path:
-                    raise RuntimeError(
-                        _('Failed to attach disk volume %s') % name)
             utils.execute('dd',
                           'if=%s' % old_path,
                           'of=%s' % new_path,
