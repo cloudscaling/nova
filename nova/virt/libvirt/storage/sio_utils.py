@@ -193,7 +193,7 @@ class SIODriver(object):
         :param name: Volume name to use
         :param size: Size of volume to create
         :param extra_specs: A dict of instance flavor extra specs
-        :return: Nothing
+        :return: ScaleIO id of the created volume
         """
         pd_name = extra_specs.get(PROTECTION_DOMAIN_KEY,
                                   CONF.scaleio.default_protection_domain_name
@@ -214,8 +214,9 @@ class SIODriver(object):
                 "supported in next Nova releases.",
                 ptype, opt_source, value_to_use)
         ptype = PROVISIONING_TYPES_MAP.get(ptype, ptype)
-        self.ioctx.create_volume(name, pd_name, sp_name, ptype,
-                                 size / units.Gi)
+        vol_id, _name = self.ioctx.create_volume(name, pd_name, sp_name, ptype,
+                                                 size / units.Gi)
+        return vol_id
 
     def remove_volume(self, name, ignore_mappings=False):
         """Deletes (removes) a ScaleIO volume.
@@ -379,29 +380,28 @@ class SIODriver(object):
                 extra_specs.get(STORAGE_POOL_KEY) ==
                 orig_extra_specs.get(STORAGE_POOL_KEY)):
             return
+        vol_id = self.get_volume_id(name)
         size = self.get_volume_size(name)
         tmp_name = name + '/#'
-        self.create_volume(tmp_name, size, extra_specs)
+        new_id = self.create_volume(tmp_name, size, extra_specs)
         try:
-            new_path = self.map_volume(tmp_name)
-            vol_id = self.get_volume_id(name)
-            old_path = self.ioctx.get_volumepath(vol_id, with_no_wait=True)
-            if old_path:
+            self.ioctx.attach_volume(new_id, _get_sdc_guid())
+            if self.ioctx.is_volume_attached(vol_id, _get_sdc_guid()):
                 mapped = True
             else:
                 mapped = False
                 self.ioctx.attach_volume(vol_id)
-                old_path = self.ioctx.get_volumepath(vol_id)
+            new_path = self.ioctx.get_volumepath(new_id)
+            old_path = self.ioctx.get_volumepath(vol_id)
             utils.execute('dd',
                           'if=%s' % old_path,
                           'of=%s' % new_path,
                           'bs=1M',
                           'iflag=direct',
                           run_as_root=True)
-            self.remove_volume(name, ignore_mappings=True)
+            self.ioctx.delete_volume(vol_id, unmap_on_delete=True)
             if not mapped:
-                self.unmap_volume(tmp_name)
-            new_id = self.get_volume_id(tmp_name)
+                self.ioctx.detach_volume(new_id, _get_sdc_guid())
             self.ioctx.rename_volume(new_id, name)
         except Exception:
             with excutils.save_and_reraise_exception():
