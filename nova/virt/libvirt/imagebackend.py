@@ -1144,9 +1144,6 @@ class Sio(Image):
                     LOG.error(_LE('Disk volume %s is not connected'),
                               self.volume_name)
 
-    def is_rescuer(self):
-        return sio_utils.is_sio_volume_rescuer(self.volume_name)
-
     def exists(self):
         return self.driver.check_volume_exists(self.volume_name)
 
@@ -1170,7 +1167,8 @@ class Sio(Image):
                 prepare_template(target=base, *args, **kwargs)
 
             base_size = disk.get_disk_size(base)
-            if size is None and self.is_rescuer():
+            if (size is None and
+                    sio_utils.is_sio_volume_rescuer(self.volume_name)):
                 size = sio_utils.choose_volume_size(base_size)
                 self.extra_specs = dict(self.extra_specs)
                 self.extra_specs[sio_utils.PROVISIONING_TYPE_KEY] = 'thin'
