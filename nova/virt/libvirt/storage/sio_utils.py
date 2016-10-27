@@ -242,7 +242,7 @@ class SIODriver(object):
                              device list
         :return: Local attached volume path
         """
-        vol_id = self.get_volume_id(name)
+        vol_id = self.ioctx.get_volumeid(name)
         try:
             self.ioctx.attach_volume(vol_id, _get_sdc_guid())
         except siolib.VolumeAlreadyMapped:
@@ -268,19 +268,18 @@ class SIODriver(object):
         :param name: String ScaleIO volume name to check
         :return: True if the volume exists, False otherwise
         """
-        try:
-            self.ioctx.get_volumeid(name)
-            return True
-        except siolib.VolumeNotFound:
-            return False
+        return self.get_volume_id(name) is not None
 
     def get_volume_id(self, name):
         """Return the ScaleIO volume ID
 
         :param name: String ScaleIO volume name to retrieve id from
-        :return: ScaleIO volume id
+        :return: ScaleIO volume id or None if such volume does not exist
         """
-        return self.ioctx.get_volumeid(name)
+        try:
+            return self.ioctx.get_volumeid(name)
+        except siolib.VolumeNotFound:
+            return None
 
     def get_volume_name(self, vol_id):
         """Return the ScaleIO volume name.
@@ -380,7 +379,7 @@ class SIODriver(object):
                 extra_specs.get(STORAGE_POOL_KEY) ==
                 orig_extra_specs.get(STORAGE_POOL_KEY)):
             return
-        vol_id = self.get_volume_id(name)
+        vol_id = self.ioctx.get_volumeid(name)
         size = self.get_volume_size(name)
         tmp_name = name + '/#'
         new_id = self.create_volume(tmp_name, size, extra_specs)
@@ -423,7 +422,7 @@ class SIODriver(object):
         :param snapshot_name: String ScaleIO snapshot name to rollback to
         :return: Nothing
         """
-        snap_id = self.get_volume_id(snapshot_name)
+        snap_id = self.ioctx.get_volumeid(snapshot_name)
         self.remove_volume(name, ignore_mappings=True)
         self.ioctx.rename_volume(snap_id, name)
         self.map_volume(name)
