@@ -1114,9 +1114,10 @@ class Sio(Image):
         self.driver = sio_utils.SIODriver()
 
         if path:
-            vol_id = path.split('-')[-1]
-            self.volume_name = self.driver.get_volume_name(vol_id)
+            self.sio_id = path.split('-')[-1]
+            self.volume_name = self.driver.get_volume_name(self.vol_id)
         else:
+            self.sio_id = None
             self.volume_name = sio_utils.get_sio_volume_name(instance,
                                                              disk_name)
 
@@ -1159,7 +1160,8 @@ class Sio(Image):
         # With this assumption the code becomes more simple and fast.
         if generating:
             sio_utils.verify_volume_size(size)
-            self.driver.create_volume(self.volume_name, size, self.extra_specs)
+            self.sio_id = self.driver.create_volume(self.volume_name, size,
+                                                    self.extra_specs)
             self.path = self.driver.map_volume(self.volume_name)
             prepare_template(target=self.path, is_block_dev=True,
                              *args, **kwargs)
@@ -1176,7 +1178,8 @@ class Sio(Image):
                 sio_utils.verify_volume_size(size)
                 self.verify_base_size(base, size, base_size=base_size)
 
-            self.driver.create_volume(self.volume_name, size, self.extra_specs)
+            self.sio_id = self.driver.create_volume(self.volume_name, size,
+                                                    self.extra_specs)
             self.path = self.driver.map_volume(self.volume_name)
             self.driver.import_image(base, self.path)
 
