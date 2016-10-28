@@ -218,7 +218,21 @@ class SIODriver(object):
                                                  size / units.Gi)
         return vol_id
 
-    def remove_volume(self, name, ignore_mappings=False):
+    def remove_volume(self, vol_id, ignore_mappings=False):
+        """Deletes (removes) a ScaleIO volume.
+
+        Removal of a volume erases all the data on the corresponding volume.
+
+        :param vol_id: String ScaleIO volume id remove
+        :param ignore_mappings: Remove even if the volume is mapped to SDCs
+        :return: Nothing
+        """
+        try:
+            self.ioctx.delete_volume(vol_id, unmap_on_delete=ignore_mappings)
+        except siolib.VolumeNotFound:
+            pass
+
+    def remove_volume_by_name(self, name, ignore_mappings=False):
         """Deletes (removes) a ScaleIO volume.
 
         Removal of a volume erases all the data on the corresponding volume.
@@ -232,33 +246,32 @@ class SIODriver(object):
         except siolib.VolumeNotFound:
             pass
 
-    def map_volume(self, name, with_no_wait=False):
+    def map_volume(self, vol_id, with_no_wait=False):
         """Connect to ScaleIO volume.
 
         Map ScaleIO volume to local block device
 
-        :param name: String ScaleIO volume name to attach
+        :param vol_id: String ScaleIO volume id to attach
         :param with_no_wait: Whether wait for the volume occures in host
                              device list
         :return: Local attached volume path
         """
-        vol_id = self.ioctx.get_volumeid(name)
         try:
             self.ioctx.attach_volume(vol_id, _get_sdc_guid())
         except siolib.VolumeAlreadyMapped:
             pass
         return self.ioctx.get_volumepath(vol_id, with_no_wait=with_no_wait)
 
-    def unmap_volume(self, name):
+    def unmap_volume(self, vol_id):
         """Disconnect from ScaleIO volume.
 
         Unmap ScaleIO volume from local block device
 
-        :param name: String ScaleIO volume name to detach
+        :param vol_id: String ScaleIO volume id to detach
         :return: Nothing
         """
         try:
-            self.ioctx.detach_volume(name, _get_sdc_guid())
+            self.ioctx.detach_volume(vol_id, _get_sdc_guid())
         except (siolib.VolumeNotMapped, siolib.VolumeNotFound):
             pass
 
@@ -270,15 +283,19 @@ class SIODriver(object):
         """
         return self.get_volume_id(name) is not None
 
-    def get_volume_id(self, name):
+    def get_volume_id(self, name, none_if_not_found=False):
         """Return the ScaleIO volume ID
 
         :param name: String ScaleIO volume name to retrieve id from
+        :param none_if_not_found: If True, handle siolib VolumeNotFound
+                                  exception and return None
         :return: ScaleIO volume id or None if such volume does not exist
         """
         try:
             return self.ioctx.get_volumeid(name)
         except siolib.VolumeNotFound:
+            if not none_if_not_found:
+                raise
             return None
 
     def get_volume_name(self, vol_id):
@@ -289,25 +306,25 @@ class SIODriver(object):
         """
         return self.ioctx.get_volumename(vol_id)
 
-    def get_volume_path(self, name):
+    def get_volume_path(self, vol_id):
         """Return the volume device path location.
 
-        :param name: String ScaleIO volume name to get path information about
+        :param vol_id: String ScaleIO volume id to get path information about
         :return: Local attached volume path, None if the volume does not exist
                  or is not connected
         """
         try:
-            return self.ioctx.get_volumepath(name)
+            return self.ioctx.get_volumepath(vol_id)
         except siolib.VolumeNotMapped:
             return None
 
-    def get_volume_size(self, name):
+    def get_volume_size(self, vol_id):
         """Return the size of the ScaleIO volume
 
-        :param name: String ScaleIO volume name to get path information about
+        :param vol_id: String ScaleIO volume id to get size of
         :return: Size of ScaleIO volume
         """
-        vol_size = self.ioctx.get_volumesize(name)
+        vol_size = self.ioctx.get_volumesize(vol_id)
         return vol_size * units.Ki
 
     def import_image(self, source, dest):
@@ -333,16 +350,15 @@ class SIODriver(object):
         """
         images.convert_image(source, dest, 'raw', out_format, run_as_root=True)
 
-    def extend_volume(self, name, new_size):
+    def extend_volume(self, vol_id, new_size):
         """Extend the size of a volume.
 
         This method is used primarily with openstack resize operation
 
-        :param name: String ScaleIO volume name to extend
+        :param vol_id: String ScaleIO volume id to extend
         :param new_size: Size of the volume to extend to
         :return: Nothing
         """
-        vol_id = self.ioctx.get_volumeid(name)
         self.ioctx.extend_volume(vol_id, new_size / units.Gi)
         # Wait for new size delivered to host. Otherwise libvirt will provide
         # old size to guest.
@@ -363,14 +379,17 @@ class SIODriver(object):
                 wait_for_new_size()
             except exception.ResizeError:
                 LOG.warning('Host system could not get new size of disk %s',
-                            name)
+                            vol_path)
 
-    def move_volume(self, name, extra_specs, orig_extra_specs):
+    def move_volume(self, vol_id, name, extra_specs, orig_extra_specs,
+                    is_mapped=False):
         """Move a volume to another protection domain or storage pool.
 
+        :param vol_id: String ScaleIO volume id to extend
         :param name: String ScaleIO volume name to extend
         :param extra_specs: A dict of instance flavor extra specs
         :param orig_extra_specs: A dict of original instance flavor extra specs
+        :param is_mapped: If the volume is mapped on the host
         :return: Nothing
         """
 
@@ -379,16 +398,12 @@ class SIODriver(object):
                 extra_specs.get(STORAGE_POOL_KEY) ==
                 orig_extra_specs.get(STORAGE_POOL_KEY)):
             return
-        vol_id = self.ioctx.get_volumeid(name)
-        size = self.get_volume_size(name)
+        size = self.get_volume_size(vol_id)
         tmp_name = name + '/#'
         new_id = self.create_volume(tmp_name, size, extra_specs)
         try:
             self.ioctx.attach_volume(new_id, _get_sdc_guid())
-            if self.ioctx.is_volume_attached(vol_id, _get_sdc_guid()):
-                mapped = True
-            else:
-                mapped = False
+            if not is_mapped:
                 self.ioctx.attach_volume(vol_id)
             new_path = self.ioctx.get_volumepath(new_id)
             old_path = self.ioctx.get_volumepath(vol_id)
@@ -399,33 +414,34 @@ class SIODriver(object):
                           'iflag=direct',
                           run_as_root=True)
             self.ioctx.delete_volume(vol_id, unmap_on_delete=True)
-            if not mapped:
+            if not is_mapped:
                 self.ioctx.detach_volume(new_id, _get_sdc_guid())
             self.ioctx.rename_volume(new_id, name)
         except Exception:
             with excutils.save_and_reraise_exception():
-                self.remove_volume(tmp_name, ignore_mappings=True)
+                self.remove_volume(new_id, ignore_mappings=True)
 
-    def snapshot_volume(self, name, snapshot_name):
+    def snapshot_volume(self, vol_id, snapshot_name):
         """Snapshot a volume.
 
-        :param name: String ScaleIO volume name to make a snapshot
+        :param vol_id: String ScaleIO volume id make a snapshot
         :param snapshot_name: String ScaleIO snapshot name to create
         :return: Nothing
         """
-        self.ioctx.snapshot_volume(name, snapshot_name)
+        self.ioctx.snapshot_volume(vol_id, snapshot_name)
 
-    def rollback_to_snapshot(self, name, snapshot_name):
+    def rollback_to_snapshot(self, vol_id, name, snapshot_name):
         """Rollback a snapshot.
 
+        :param vol_id: String ScaleIO volume id to rollback to a snapshot
         :param name: String ScaleIO volume name to rollback to a snapshot
         :param snapshot_name: String ScaleIO snapshot name to rollback to
         :return: Nothing
         """
         snap_id = self.ioctx.get_volumeid(snapshot_name)
-        self.remove_volume(name, ignore_mappings=True)
+        self.remove_volume(vol_id, ignore_mappings=True)
         self.ioctx.rename_volume(snap_id, name)
-        self.map_volume(name)
+        self.map_volume(snap_id)
 
     def map_volumes(self, instance):
         """Map all instance volumes to its compute host.
@@ -433,11 +449,11 @@ class SIODriver(object):
         :param intance: Instance object
         :return: Nothing
         """
-        volumes = self.ioctx.list_volume_names()
+        volumes = self.ioctx.list_volume_infos()
         prefix = _uuid_to_base64(instance.uuid)
-        volumes = (vol for vol in volumes if vol.startswith(prefix))
+        volumes = (vol for vol in volumes if vol['name'].startswith(prefix))
         for volume in volumes:
-            self.map_volume(volume, with_no_wait=True)
+            self.map_volume(volume['id'], with_no_wait=True)
 
     def cleanup_volumes(self, instance, unmap_only=False):
         """Cleanup all instance volumes.
@@ -446,14 +462,14 @@ class SIODriver(object):
         :param unmap_only: Do not remove, only unmap from the instance host
         :return: Nothing
         """
-        volumes = self.ioctx.list_volume_names()
+        volumes = self.ioctx.list_volume_infos()
         prefix = _uuid_to_base64(instance.uuid)
-        volumes = (vol for vol in volumes if vol.startswith(prefix))
+        volumes = (vol for vol in volumes if vol['name'].startswith(prefix))
         for volume in volumes:
             if unmap_only:
-                self.unmap_volume(volume)
+                self.unmap_volume(volume['id'])
             else:
-                self.remove_volume(volume, ignore_mappings=True)
+                self.remove_volume(volume['id'], ignore_mappings=True)
 
     def cleanup_rescue_volumes(self, instance):
         """Cleanup instance volumes used in rescue mode.
@@ -464,4 +480,4 @@ class SIODriver(object):
         # NOTE(ft): We assume that only root disk is recreated in rescue mode.
         # With this assumption the code becomes more simple and fast.
         rescue_name = _uuid_to_base64(instance.uuid) + 'rescue'
-        self.remove_volume(rescue_name, ignore_mappings=True)
+        self.remove_volume_by_name(rescue_name, ignore_mappings=True)

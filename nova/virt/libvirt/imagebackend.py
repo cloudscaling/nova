@@ -1104,6 +1104,9 @@ class Ploop(Image):
 
 class Sio(Image):
 
+    _sio_id = None
+    _sio_name = None
+
     def __init__(self, instance=None, disk_name=None, path=None):
 
         self.extra_specs = instance.flavor.extra_specs
@@ -1115,11 +1118,10 @@ class Sio(Image):
 
         if path:
             self.sio_id = path.split('-')[-1]
-            self.volume_name = self.driver.get_volume_name(self.vol_id)
+            self.sio_name = None
         else:
             self.sio_id = None
-            self.volume_name = sio_utils.get_sio_volume_name(instance,
-                                                             disk_name)
+            self.sio_name = sio_utils.get_sio_volume_name(instance, disk_name)
 
         super(Sio, self).__init__(path, "block", "raw", is_block_dev=True)
 
@@ -1135,20 +1137,43 @@ class Sio(Image):
     def disconnect_disks(instance):
         sio_utils.SIODriver().cleanup_volumes(instance, unmap_only=True)
 
+    @property
+    def sio_id(self):
+        if not self._sio_id:
+            self._sio_id = self.driver.get_volume_id(self._sio_name)
+        return self._sio_id
+
+    @sio_id.setter
+    def sio_id(self, value):
+        self._sio_id = value
+
+    @property
+    def sio_name(self):
+        if not self._sio_name:
+            self._sio_name = self.driver.get_volume_name(self._sio_id)
+        return self._sio_name
+
+    @sio_name.setter
+    def sio_name(self, value):
+        self._sio_name = value
+
+    def exists(self):
+        if not self._sio_id:
+            self._sio_id = self.driver.get_volume_id(self._sio_name,
+                                                     none_if_not_found=True)
+        return bool(self.sio_id)
+
     def ensure_path(self):
         if self.path is None:
             try:
-                self.path = self.driver.get_volume_path(self.volume_name)
+                self.path = self.driver.get_volume_path(self.sio_id)
             except Exception:
                 with excutils.save_and_reraise_exception():
                     LOG.error(_LE('Disk volume %s is not connected'),
-                              self.volume_name)
-
-    def exists(self):
-        return self.driver.check_volume_exists(self.volume_name)
+                              self.sio_name)
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
-        if self.driver.check_volume_exists(self.volume_name):
+        if self.exists():
             self.connect_disk()
             return
 
@@ -1157,9 +1182,9 @@ class Sio(Image):
         # With this assumption the code becomes more simple and fast.
         if generating:
             sio_utils.verify_volume_size(size)
-            self.sio_id = self.driver.create_volume(self.volume_name, size,
+            self.sio_id = self.driver.create_volume(self.sio_name, size,
                                                     self.extra_specs)
-            self.path = self.driver.map_volume(self.volume_name)
+            self.path = self.driver.map_volume(self.sio_id)
             prepare_template(target=self.path, is_block_dev=True,
                              *args, **kwargs)
         else:
@@ -1168,7 +1193,7 @@ class Sio(Image):
 
             base_size = disk.get_disk_size(base)
             if (size is None and
-                    sio_utils.is_sio_volume_rescuer(self.volume_name)):
+                    sio_utils.is_sio_volume_rescuer(self.sio_name)):
                 size = sio_utils.choose_volume_size(base_size)
                 self.extra_specs = dict(self.extra_specs)
                 self.extra_specs[sio_utils.PROVISIONING_TYPE_KEY] = 'thin'
@@ -1176,19 +1201,20 @@ class Sio(Image):
                 sio_utils.verify_volume_size(size)
                 self.verify_base_size(base, size, base_size=base_size)
 
-            self.sio_id = self.driver.create_volume(self.volume_name, size,
+            self.sio_id = self.driver.create_volume(self.sio_name, size,
                                                     self.extra_specs)
-            self.path = self.driver.map_volume(self.volume_name)
+            self.path = self.driver.map_volume(self.sio_id)
             self.driver.import_image(base, self.path)
 
     def connect_disk(self):
-        self.path = self.driver.map_volume(self.volume_name)
+        self.driver.map_volume(self.sio_id, with_no_wait=True)
         if self.orig_extra_specs is not None:
-            self.driver.move_volume(self.volume_name, self.extra_specs,
-                                      self.orig_extra_specs)
+            self.driver.move_volume(
+                self.sio_id, self.sio_name, self.extra_specs,
+                self.orig_extra_specs, is_mapped=True)
 
     def get_disk_size(self, name):
-        return self.driver.get_volume_size(self.volume_name)
+        return self.driver.get_volume_size(self.sio_id)
 
     def get_model(self, connection):
         return imgmodel.SIOImage()
@@ -1214,19 +1240,19 @@ class Sio(Image):
 
     def resize_image(self, size):
         sio_utils.verify_volume_size(size)
-        self.driver.extend_volume(self.volume_name, size)
+        self.driver.extend_volume(self.sio_id, size)
 
     def create_snap(self, name):
-        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
-        self.driver.snapshot_volume(self.volume_name, snap_name)
+        snap_name = sio_utils.get_sio_snapshot_name(self.sio_name, name)
+        self.driver.snapshot_volume(self.sio_id, snap_name)
 
     def remove_snap(self, name, ignore_errors=False):
-        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
-        self.driver.remove_volume(snap_name)
+        snap_name = sio_utils.get_sio_snapshot_name(self.sio_name, name)
+        self.driver.remove_volume_by_name(snap_name)
 
     def rollback_to_snap(self, name):
-        snap_name = sio_utils.get_sio_snapshot_name(self.volume_name, name)
-        self.driver.rollback_to_snapshot(self.volume_name, snap_name)
+        snap_name = sio_utils.get_sio_snapshot_name(self.sio_name, name)
+        self.driver.rollback_to_snapshot(self.sio_id, self.sio_name, snap_name)
 
 
 class Backend(object):
