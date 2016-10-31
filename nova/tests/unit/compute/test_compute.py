@@ -2518,8 +2518,12 @@ class ComputeTestCase(BaseTestCase):
 
         self.compute.terminate_instance(self.context, instance, [], [])
 
-    def test_resume_notifications(self):
+    @mock.patch.object(nova.compute.utils, 'notify_about_instance_action')
+    @mock.patch('nova.context.RequestContext.elevated')
+    def test_resume_notifications(self, mock_context, mock_notify):
         # ensure instance can be suspended and resumed.
+        context = self.context
+        mock_context.return_value = context
         instance = self._create_fake_instance_obj()
         self.compute.build_and_run_instance(self.context, instance, {}, {}, {},
                                             block_device_mapping=[])
@@ -2536,6 +2540,11 @@ class ComputeTestCase(BaseTestCase):
         msg = fake_notifier.NOTIFICATIONS[5]
         self.assertEqual(msg.event_type,
                          'compute.instance.resume.end')
+        mock_notify.assert_has_calls([
+            mock.call(context, instance, 'fake-mini',
+                      action='resume', phase='start'),
+            mock.call(context, instance, 'fake-mini',
+                      action='resume', phase='end')])
         self.compute.terminate_instance(self.context, instance, [], [])
 
     def test_resume_no_old_state(self):
@@ -10236,9 +10245,11 @@ class ComputeAPIIpFilterTestCase(test.NoDBTestCase):
                 expected_ids = expected_ids[:expected_len]
             self.assertEqual(expected_ids, [inst.id for inst in insts])
 
+    @mock.patch.object(objects.BuildRequestList, 'get_by_filters')
     @mock.patch.object(objects.CellMapping, 'get_by_uuid',
                        side_effect=exception.CellMappingNotFound(uuid='fake'))
-    def test_ip_filtering_no_limit_to_db(self, _mock_cell_map_get):
+    def test_ip_filtering_no_limit_to_db(self, _mock_cell_map_get,
+                                         mock_buildreq_get):
         c = context.get_admin_context()
         # Limit is not supplied to the DB when using an IP filter
         with mock.patch('nova.objects.InstanceList.get_by_filters') as m_get:
@@ -10248,9 +10259,11 @@ class ComputeAPIIpFilterTestCase(test.NoDBTestCase):
             kwargs = m_get.call_args[1]
             self.assertIsNone(kwargs['limit'])
 
+    @mock.patch.object(objects.BuildRequestList, 'get_by_filters')
     @mock.patch.object(objects.CellMapping, 'get_by_uuid',
                        side_effect=exception.CellMappingNotFound(uuid='fake'))
-    def test_ip_filtering_pass_limit_to_db(self, _mock_cell_map_get):
+    def test_ip_filtering_pass_limit_to_db(self, _mock_cell_map_get,
+                                           mock_buildreq_get):
         c = context.get_admin_context()
         # No IP filter, verify that the limit is passed
         with mock.patch('nova.objects.InstanceList.get_by_filters') as m_get:
