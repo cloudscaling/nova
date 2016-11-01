@@ -150,7 +150,11 @@ def _get_sdc_guid():
         if CONF.scaleio.default_sdcguid:
             _sdc_guid = CONF.scaleio.default_sdcguid
         else:
-            (out, _err) = utils.execute('drv_cfg', '--query_guid',
+            if CONF.workarounds.disable_rootwrap:
+                drv_cfg = '/opt/emc/scaleio/sdc/bin/drv_cfg'
+            else:
+                drv_cfg = 'drv_cfg'
+            (out, _err) = utils.execute(drv_cfg, '--query_guid',
                                         run_as_root=True)
             LOG.info('Acquire ScaleIO SDC guid %s', out)
             _sdc_guid = out

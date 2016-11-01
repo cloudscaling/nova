@@ -1161,7 +1161,7 @@ class Sio(Image):
         if not self._sio_id:
             self._sio_id = self.driver.get_volume_id(self._sio_name,
                                                      none_if_not_found=True)
-        return bool(self.sio_id)
+        return bool(self._sio_id)
 
     def ensure_path(self):
         if self.path is None:
