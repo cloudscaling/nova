@@ -447,7 +447,7 @@ class SIODriver(object):
         self.ioctx.rename_volume(snap_id, name)
         self.map_volume(snap_id)
 
-    def map_volumes(self, instance):
+    def map_volumes(self, instance, with_no_wait=False):
         """Map all instance volumes to its compute host.
 
         :param intance: Instance object
@@ -458,6 +458,9 @@ class SIODriver(object):
         volumes = (vol for vol in volumes if vol['name'].startswith(prefix))
         for volume in volumes:
             self.map_volume(volume['id'], with_no_wait=True)
+        if not with_no_wait:
+            for volume in volumes:
+                self.ioctx.get_volumepath(volume['id'])
 
     def cleanup_volumes(self, instance, unmap_only=False):
         """Cleanup all instance volumes.

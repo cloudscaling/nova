@@ -446,12 +446,13 @@ class Image(object):
         pass
 
     @staticmethod
-    def connect_disks(instance):
+    def connect_disks(instance, with_no_wait=False):
         """Connect existing instance disks to the compute host.
 
         Makes existing instance disks available to use with libvirt.
 
         :param instance: instance object
+        :param with_no_wait: do not wait until disks are available on the host
         """
         pass
 
@@ -1131,8 +1132,8 @@ class Sio(Image):
         return True
 
     @staticmethod
-    def connect_disks(instance):
-        sio_utils.SIODriver().map_volumes(instance)
+    def connect_disks(instance, with_no_wait=False):
+        sio_utils.SIODriver().map_volumes(instance, with_no_wait=with_no_wait)
 
     @staticmethod
     def disconnect_disks(instance):
