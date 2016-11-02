@@ -1106,6 +1106,7 @@ class Sio(Image):
 
     _sio_id = None
     _sio_name = None
+    _exists = None
 
     def __init__(self, instance=None, disk_name=None, path=None):
 
@@ -1158,10 +1159,12 @@ class Sio(Image):
         self._sio_name = value
 
     def exists(self):
-        if not self._sio_id:
-            self._sio_id = self.driver.get_volume_id(self._sio_name,
-                                                     none_if_not_found=True)
-        return bool(self._sio_id)
+        if self._exists is None:
+            if not self._sio_id:
+                self._sio_id = self.driver.get_volume_id(
+                    self._sio_name, none_if_not_found=True)
+            self._exists = bool(self._sio_id)
+        return self._exists
 
     def ensure_path(self):
         if self.path is None:

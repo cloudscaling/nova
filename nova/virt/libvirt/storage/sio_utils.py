@@ -285,7 +285,7 @@ class SIODriver(object):
         :param name: String ScaleIO volume name to check
         :return: True if the volume exists, False otherwise
         """
-        return self.get_volume_id(name) is not None
+        return self.get_volume_id(name, none_if_not_found=True) is not None
 
     def get_volume_id(self, name, none_if_not_found=False):
         """Return the ScaleIO volume ID
