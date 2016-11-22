@@ -260,6 +260,3 @@ touch: CommandFilter, touch, root
 
 # nova/virt/libvirt/volume/vzstorage.py
 pstorage-mount: CommandFilter, pstorage-mount, root
-
-# nova/virt/libvirt/storage/sio_utils.py: 'partprobe', device_path
-partprobe: CommandFilter, partprobe, root

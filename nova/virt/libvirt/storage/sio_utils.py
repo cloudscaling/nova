@@ -16,7 +16,6 @@
 import base64
 import binascii
 
-from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_service import loopingcall
@@ -112,20 +111,6 @@ def get_sio_snapshot_name(volume_name, snapshot_name):
 
 def is_sio_volume_rescuer(volume_name):
     return volume_name.endswith('rescue')
-
-def probe_partitions(device_path, run_as_root=False):
-    """Method called to trigger OS and inform the OS of partition table changes
-
-    When ScaleIO maps a volume, there is a delay in the time the OS trigger
-    probes for partitions. This method will force that trigger so the OS
-    will see the device partitions
-    :param device_path: Full device path to probe
-    :return: Nothing
-    """
-    try:
-        utils.execute('partprobe', device_path, run_as_root=run_as_root)
-    except processutils.ProcessExecutionError as exc:
-        LOG.debug("Probing the device partitions has failed. (%s)", exc)
 
 
 def _uuid_to_base64(uuid):
@@ -341,8 +326,6 @@ class SIODriver(object):
         info = images.qemu_img_info(source)
         images.convert_image(source, dest, info.file_format, 'raw',
                              run_as_root=True)
-        # trigger OS probe of partition devices
-        probe_partitions(device_path=dest, run_as_root=True)
 
     def export_image(self, source, dest, out_format):
         """Export ScaleIO volume.
