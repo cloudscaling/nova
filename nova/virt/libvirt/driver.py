@@ -33,6 +33,7 @@ import functools
 import glob
 import itertools
 import mmap
+import netaddr
 import operator
 import os
 import shutil
@@ -168,6 +169,17 @@ libvirt_volume_drivers = [
     'vzstorage='
         'nova.virt.libvirt.volume.vzstorage.LibvirtVZStorageVolumeDriver',
 ]
+
+
+def driver_dict_from_config(named_driver_config, *args, **kwargs):
+    driver_registry = dict()
+
+    for driver_str in named_driver_config:
+        driver_type, _sep, driver = driver_str.partition('=')
+        driver_class = importutils.import_class(driver)
+        driver_registry[driver_type] = driver_class(*args, **kwargs)
+
+    return driver_registry
 
 
 def patch_tpool_proxy():
@@ -353,8 +365,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         self.vif_driver = libvirt_vif.LibvirtGenericVIFDriver()
 
-        self.volume_drivers = driver.driver_dict_from_config(
-            self._get_volume_drivers(), self)
+        self.volume_drivers = driver_dict_from_config(
+            self._get_volume_drivers(), self._host)
 
         self._disk_cachemode = None
         self.image_cache_manager = imagecache.ImageCacheManager()
@@ -550,6 +562,10 @@ class LibvirtDriver(driver.ComputeDriver):
         # Adding VIR_MIGRATE_UNDEFINE_SOURCE because, without it, migrated
         # instance will remain defined on the source host
         migration_flags |= libvirt.VIR_MIGRATE_UNDEFINE_SOURCE
+
+        # Adding VIR_MIGRATE_PERSIST_DEST to persist the VM on the
+        # destination host
+        migration_flags |= libvirt.VIR_MIGRATE_PERSIST_DEST
 
         live_migration_flags = block_migration_flags = migration_flags
 
@@ -1323,7 +1339,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
         self._disconnect_volume(connection_info, disk_dev)
 
-    def attach_interface(self, instance, image_meta, vif):
+    def attach_interface(self, context, instance, image_meta, vif):
         guest = self._host.get_guest(instance)
 
         self.vif_driver.plug(instance, vif)
@@ -1343,7 +1359,7 @@ class LibvirtDriver(driver.ComputeDriver):
             raise exception.InterfaceAttachFailed(
                     instance_uuid=instance.uuid)
 
-    def detach_interface(self, instance, vif):
+    def detach_interface(self, context, instance, vif):
         guest = self._host.get_guest(instance)
         cfg = self.vif_driver.get_config(instance, vif,
                                          instance.image_meta,
@@ -2357,7 +2373,9 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def unpause(self, instance):
         """Unpause paused VM instance."""
-        self._host.get_guest(instance).resume()
+        guest = self._host.get_guest(instance)
+        guest.resume()
+        guest.sync_guest_time()
 
     def _clean_shutdown(self, instance, timeout, retry_interval):
         """Attempt to shutdown the instance gracefully.
@@ -2490,6 +2508,10 @@ class LibvirtDriver(driver.ComputeDriver):
         self._attach_pci_devices(guest,
             pci_manager.get_instance_pci_devs(instance))
         self._attach_sriov_ports(context, instance, guest, network_info)
+        timer = loopingcall.FixedIntervalLoopingCall(self._wait_for_running,
+                                                     instance)
+        timer.start(interval=0.5).wait()
+        guest.sync_guest_time()
 
     def resume_state_on_host_boot(self, context, instance, network_info,
                                   block_device_info=None):
@@ -2654,27 +2676,37 @@ class LibvirtDriver(driver.ComputeDriver):
 
         return fpath
 
+    def _get_console_output_file(self, instance, console_log):
+        bytes_to_read = MAX_CONSOLE_BYTES
+        log_data = ""  # The last N read bytes
+        i = 0  # in case there is a log rotation (like "virtlogd")
+        path = console_log
+        while bytes_to_read > 0 and os.path.exists(path):
+            libvirt_utils.chown(path, os.getuid())
+            with libvirt_utils.file_open(path, 'rb') as fp:
+                read_log_data, remaining = utils.last_bytes(fp, bytes_to_read)
+                # We need the log file content in chronological order,
+                # that's why we *prepend* the log data.
+                log_data = read_log_data + log_data
+                bytes_to_read -= len(read_log_data)
+                path = console_log + "." + str(i)
+                i += 1
+            if remaining > 0:
+                LOG.info(_LI('Truncated console log returned, '
+                             '%d bytes ignored'), remaining,
+                         instance=instance)
+        return log_data
+
     def get_console_output(self, context, instance):
         guest = self._host.get_guest(instance)
 
         xml = guest.get_xml_desc()
         tree = etree.fromstring(xml)
 
-        console_types = {}
-
-        # NOTE(comstud): We want to try 'file' types first, then try 'pty'
-        # types.  We can't use Python 2.7 syntax of:
-        # tree.find("./devices/console[@type='file']/source")
-        # because we need to support 2.6.
-        console_nodes = tree.findall('./devices/console')
-        for console_node in console_nodes:
-            console_type = console_node.get('type')
-            console_types.setdefault(console_type, [])
-            console_types[console_type].append(console_node)
-
         # If the guest has a console logging to a file prefer to use that
-        if console_types.get('file'):
-            for file_console in console_types.get('file'):
+        file_consoles = tree.findall("./devices/console[@type='file']")
+        if file_consoles:
+            for file_console in file_consoles:
                 source_node = file_console.find('./source')
                 if source_node is None:
                     continue
@@ -2688,20 +2720,12 @@ class LibvirtDriver(driver.ComputeDriver):
                              instance=instance)
                     return ""
 
-                libvirt_utils.chown(path, os.getuid())
-
-                with libvirt_utils.file_open(path, 'rb') as fp:
-                    log_data, remaining = utils.last_bytes(fp,
-                                                           MAX_CONSOLE_BYTES)
-                    if remaining > 0:
-                        LOG.info(_LI('Truncated console log returned, '
-                                     '%d bytes ignored'), remaining,
-                                 instance=instance)
-                    return log_data
+                return self._get_console_output_file(instance, path)
 
         # Try 'pty' types
-        if console_types.get('pty'):
-            for pty_console in console_types.get('pty'):
+        pty_consoles = tree.findall("./devices/console[@type='pty']")
+        if pty_consoles:
+            for pty_console in pty_consoles:
                 source_node = pty_console.find('./source')
                 if source_node is None:
                     continue
@@ -2720,15 +2744,15 @@ class LibvirtDriver(driver.ComputeDriver):
             libvirt_utils.chown(console_log, os.getuid())
 
         data = self._flush_libvirt_console(pty)
+        # NOTE(markus_z): The virt_types kvm and qemu are the only ones
+        # which create a dedicated file device for the console logging.
+        # Other virt_types like xen, lxc, uml, parallels depend on the
+        # flush of that pty device into the "console.log" file to ensure
+        # that a series of "get_console_output" calls return the complete
+        # content even after rebooting a guest.
         fpath = self._append_to_file(data, console_log)
 
-        with libvirt_utils.file_open(fpath, 'rb') as fp:
-            log_data, remaining = utils.last_bytes(fp, MAX_CONSOLE_BYTES)
-            if remaining > 0:
-                LOG.info(_LI('Truncated console log returned, '
-                             '%d bytes ignored'),
-                         remaining, instance=instance)
-            return log_data
+        return self._get_console_output_file(instance, fpath)
 
     def get_host_ip_addr(self):
         ips = compute_utils.get_machine_ips()
@@ -2975,7 +2999,8 @@ class LibvirtDriver(driver.ComputeDriver):
                       disk_images=None, network_info=None,
                       block_device_info=None, files=None,
                       admin_pass=None, inject_files=True,
-                      fallback_from_host=None):
+                      fallback_from_host=None,
+                      ignore_bdi_for_swap=False):
         booted_from_volume = self._is_booted_from_volume(
             instance, disk_mapping)
 
@@ -3067,13 +3092,26 @@ class LibvirtDriver(driver.ComputeDriver):
             mapping = disk_mapping['disk.swap']
             swap_mb = 0
 
-            swap = driver.block_device_info_get_swap(block_device_info)
-            if driver.swap_is_usable(swap):
-                swap_mb = swap['swap_size']
-            elif (inst_type['swap'] > 0 and
-                  not block_device.volume_in_mapping(
-                    mapping['dev'], block_device_info)):
+            if ignore_bdi_for_swap:
+                # This is a workaround to support legacy swap resizing,
+                # which does not touch swap size specified in bdm,
+                # but works with flavor specified size only.
+                # In this case we follow the legacy logic and ignore block
+                # device info completely.
+                # NOTE(ft): This workaround must be removed when a correct
+                # implementation of resize operation changing sizes in bdms is
+                # developed. Also at that stage we probably may get rid of
+                # the direct usage of flavor swap size here,
+                # leaving the work with bdm only.
                 swap_mb = inst_type['swap']
+            else:
+                swap = driver.block_device_info_get_swap(block_device_info)
+                if driver.swap_is_usable(swap):
+                    swap_mb = swap['swap_size']
+                elif (inst_type['swap'] > 0 and
+                      not block_device.volume_in_mapping(
+                        mapping['dev'], block_device_info)):
+                    swap_mb = inst_type['swap']
 
             if swap_mb > 0:
                 size = swap_mb * units.Mi
@@ -3856,11 +3894,27 @@ class LibvirtDriver(driver.ComputeDriver):
                 # Now get the CpuTune configuration from the numa_topology
                 guest_cpu_tune = vconfig.LibvirtConfigGuestCPUTune()
                 guest_numa_tune = vconfig.LibvirtConfigGuestNUMATune()
-                allpcpus = []
+                emupcpus = []
 
                 numa_mem = vconfig.LibvirtConfigGuestNUMATuneMemory()
                 numa_memnodes = [vconfig.LibvirtConfigGuestNUMATuneMemNode()
                                  for _ in guest_cpu_numa_config.cells]
+
+                vcpus_rt = set([])
+                wants_realtime = hardware.is_realtime_enabled(flavor)
+                if wants_realtime:
+                    if not self._host.has_min_version(
+                            MIN_LIBVIRT_REALTIME_VERSION):
+                        raise exception.RealtimePolicyNotSupported()
+                    # Prepare realtime config for libvirt
+                    vcpus_rt = hardware.vcpus_realtime_topology(
+                        flavor, image_meta)
+                    vcpusched = vconfig.LibvirtConfigGuestCPUTuneVCPUSched()
+                    vcpusched.vcpus = vcpus_rt
+                    vcpusched.scheduler = "fifo"
+                    vcpusched.priority = (
+                        CONF.libvirt.realtime_scheduler_priority)
+                    guest_cpu_tune.vcpusched.append(vcpusched)
 
                 for host_cell in topology.cells:
                     for guest_node_id, guest_config_cell in enumerate(
@@ -3890,7 +3944,21 @@ class LibvirtDriver(driver.ComputeDriver):
                                     pin_cpuset.cpuset = set([pcpu])
                                 else:
                                     pin_cpuset.cpuset = host_cell.cpuset
-                                allpcpus.extend(pin_cpuset.cpuset)
+                                if not wants_realtime or cpu not in vcpus_rt:
+                                    # - If realtime IS NOT enabled, the
+                                    #   emulator threads are allowed to float
+                                    #   across all the pCPUs associated with
+                                    #   the guest vCPUs ("not wants_realtime"
+                                    #   is true, so we add all pcpus)
+                                    # - If realtime IS enabled, then at least
+                                    #   1 vCPU is required to be set aside for
+                                    #   non-realtime usage. The emulator
+                                    #   threads are allowed to float acros the
+                                    #   pCPUs that are associated with the
+                                    #   non-realtime VCPUs (the "cpu not in
+                                    #   vcpu_rt" check deals with this
+                                    #   filtering)
+                                    emupcpus.extend(pin_cpuset.cpuset)
                                 guest_cpu_tune.vcpupin.append(pin_cpuset)
 
                 # TODO(berrange) When the guest has >1 NUMA node, it will
@@ -3910,27 +3978,10 @@ class LibvirtDriver(driver.ComputeDriver):
                 # cross NUMA node traffic. This is an area of investigation
                 # for QEMU community devs.
                 emulatorpin = vconfig.LibvirtConfigGuestCPUTuneEmulatorPin()
-                emulatorpin.cpuset = set(allpcpus)
+                emulatorpin.cpuset = set(emupcpus)
                 guest_cpu_tune.emulatorpin = emulatorpin
                 # Sort the vcpupin list per vCPU id for human-friendlier XML
                 guest_cpu_tune.vcpupin.sort(key=operator.attrgetter("id"))
-
-                if hardware.is_realtime_enabled(flavor):
-                    if not self._host.has_min_version(
-                            MIN_LIBVIRT_REALTIME_VERSION):
-                        raise exception.RealtimePolicyNotSupported()
-
-                    vcpus_rt, vcpus_em = hardware.vcpus_realtime_topology(
-                        set(cpu.id for cpu in guest_cpu_tune.vcpupin),
-                        flavor, image_meta)
-
-                    vcpusched = vconfig.LibvirtConfigGuestCPUTuneVCPUSched()
-                    vcpusched.vcpus = vcpus_rt
-                    vcpusched.scheduler = "fifo"
-                    vcpusched.priority = (
-                        CONF.libvirt.realtime_scheduler_priority)
-                    guest_cpu_tune.vcpusched.append(vcpusched)
-                    guest_cpu_tune.emulatorpin.cpuset = vcpus_em
 
                 guest_numa_tune.memory = numa_mem
                 guest_numa_tune.memnodes = numa_memnodes
@@ -5810,11 +5861,28 @@ class LibvirtDriver(driver.ComputeDriver):
                       e, instance=instance)
             raise
 
-    def _check_graphics_addresses_can_live_migrate(self, listen_addrs):
+    @staticmethod
+    def _check_ip_address_local(addr, error_msg=None):
         LOCAL_ADDRS = ('0.0.0.0', '127.0.0.1', '::', '::1')
+        try:
+            val = netaddr.IPAddress(addr).format()
+        except (netaddr.AddrFormatError, ValueError):
+            LOG.warning(_LW('Invalid Address - %(addr)s: '
+                       '%(errmsg)s'),
+                         {'addr': addr, 'errmsg': error_msg})
+            val = addr
+        return val in LOCAL_ADDRS
 
-        local_vnc = CONF.vnc.vncserver_listen in LOCAL_ADDRS
-        local_spice = CONF.spice.server_listen in LOCAL_ADDRS
+    def _check_graphics_addresses_can_live_migrate(self, listen_addrs):
+        error_msg = _LW("CONF.vnc.vncserver_listen network "
+                        "address is not correctly formatted.")
+        local_vnc = self._check_ip_address_local(
+            CONF.vnc.vncserver_listen, error_msg)
+
+        error_msg = _LW("CONF.spice.server_listen network "
+                        "address is not correctly formatted.")
+        local_spice = self._check_ip_address_local(
+            CONF.spice.server_listen, error_msg)
 
         if ((CONF.vnc.enabled and not local_vnc) or
             (CONF.spice.enabled and not local_spice)):
@@ -5829,8 +5897,15 @@ class LibvirtDriver(driver.ComputeDriver):
             raise exception.MigrationError(reason=msg)
 
         if listen_addrs:
-            dest_local_vnc = listen_addrs.get('vnc') in LOCAL_ADDRS
-            dest_local_spice = listen_addrs.get('spice') in LOCAL_ADDRS
+            error_msg = _LW("VNC listen address network "
+                            "address is not correctly formatted.")
+            dest_local_vnc = self._check_ip_address_local(
+                listen_addrs.get('vnc'), error_msg)
+
+            error_msg = _LW("SPICE listen address network "
+                            "address is not correctly formatted.")
+            dest_local_spice = self._check_ip_address_local(
+                listen_addrs.get('spice'), error_msg)
 
             if ((CONF.vnc.enabled and not dest_local_vnc) or
                 (CONF.spice.enabled and not dest_local_spice)):
@@ -6019,15 +6094,32 @@ class LibvirtDriver(driver.ComputeDriver):
         steps = CONF.libvirt.live_migration_downtime_steps
         delay = CONF.libvirt.live_migration_downtime_delay
 
+        downtime_min = nova.conf.libvirt.LIVE_MIGRATION_DOWNTIME_MIN
+        steps_min = nova.conf.libvirt.LIVE_MIGRATION_DOWNTIME_STEPS_MIN
+        delay_min = nova.conf.libvirt.LIVE_MIGRATION_DOWNTIME_DELAY_MIN
+
         # TODO(hieulq): Need to move min/max value into the config option,
         # currently oslo_config will raise ValueError instead of setting
         # option value to its min/max.
-        if downtime < nova.conf.libvirt.LIVE_MIGRATION_DOWNTIME_MIN:
-            downtime = nova.conf.libvirt.LIVE_MIGRATION_DOWNTIME_MIN
-        if steps < nova.conf.libvirt.LIVE_MIGRATION_DOWNTIME_STEPS_MIN:
-            steps = nova.conf.libvirt.LIVE_MIGRATION_DOWNTIME_STEPS_MIN
-        if delay < nova.conf.libvirt.LIVE_MIGRATION_DOWNTIME_DELAY_MIN:
-            delay = nova.conf.libvirt.LIVE_MIGRATION_DOWNTIME_DELAY_MIN
+        if downtime < downtime_min:
+            LOG.warning(_LW("Config option live_migration_downtime's value "
+                            "is less than minimum value %dms, rounded up to "
+                            "the minimum value and will raise ValueError in "
+                            "the future release."), downtime_min)
+            downtime = downtime_min
+
+        if steps < steps_min:
+            LOG.warning(_LW("Config option live_migration_downtime_steps's "
+                            "value is less than minimum value %dms, rounded "
+                            "up to the minimum value and will raise "
+                            "ValueError in the future release."), steps_min)
+            steps = steps_min
+        if delay < delay_min:
+            LOG.warning(_LW("Config option live_migration_downtime_delay's "
+                            "value is less than minimum value %dms, rounded "
+                            "up to the minimum value and will raise "
+                            "ValueError in the future release."), delay_min)
+            delay = delay_min
         delay = int(delay * data_gb)
 
         offset = downtime / float(steps + 1)
@@ -6270,8 +6362,7 @@ class LibvirtDriver(driver.ComputeDriver):
                           instance=instance)
                 libvirt_migrate.run_recover_tasks(self._host, guest, instance,
                                                   on_migration_failure)
-                recover_method(context, instance, dest, block_migration,
-                               migrate_data)
+                recover_method(context, instance, dest, migrate_data)
                 break
             elif info.type == libvirt.VIR_DOMAIN_JOB_CANCELLED:
                 # Migration was stopped by admin
@@ -6279,8 +6370,8 @@ class LibvirtDriver(driver.ComputeDriver):
                          instance=instance)
                 libvirt_migrate.run_recover_tasks(self._host, guest, instance,
                                                   on_migration_failure)
-                recover_method(context, instance, dest, block_migration,
-                               migrate_data, migration_status='cancelled')
+                recover_method(context, instance, dest, migrate_data,
+                               migration_status='cancelled')
                 break
             else:
                 LOG.warning(_LW("Unexpected migration job type: %d"),
@@ -6732,6 +6823,14 @@ class LibvirtDriver(driver.ComputeDriver):
         :param block_migration: if true, post operation of block_migration.
         """
         guest = self._host.get_guest(instance)
+
+        # TODO(sahid): In Ocata we have added the migration flag
+        # VIR_MIGRATE_PERSIST_DEST to libvirt, which means that the
+        # guest XML is going to be set in libvirtd on destination node
+        # automatically. However we do not remove that part until P*
+        # because during an upgrade, to ensure migrating instances
+        # from node running Newton is still going to set the guest XML
+        # in libvirtd on destination node.
 
         # Make sure we define the migrated instance in libvirt
         xml = guest.get_xml_desc()
@@ -7226,7 +7325,8 @@ class LibvirtDriver(driver.ComputeDriver):
         # backing file.
         self._create_image(context, instance, block_disk_info['mapping'],
                            network_info=network_info,
-                           block_device_info=None, inject_files=False,
+                           block_device_info=block_device_info,
+                           inject_files=False, ignore_bdi_for_swap=True,
                            fallback_from_host=migration.source_compute)
 
         # Required by Quobyte CI
@@ -7298,7 +7398,8 @@ class LibvirtDriver(driver.ComputeDriver):
         # and the status change in the port might go undetected by the neutron
         # L2 agent (or neutron server) so neutron may not know that the VIF was
         # unplugged in the first place and never send an event.
-        self._create_domain_and_network(context, xml, instance, network_info,
+        guest = self._create_domain_and_network(context, xml, instance,
+                                        network_info,
                                         block_disk_info,
                                         block_device_info=block_device_info,
                                         power_on=power_on,
@@ -7309,6 +7410,9 @@ class LibvirtDriver(driver.ComputeDriver):
                                                     self._wait_for_running,
                                                     instance)
             timer.start(interval=0.5).wait()
+
+            # Sync guest time after migration.
+            guest.sync_guest_time()
 
         LOG.debug("finish_migration finished successfully.", instance=instance)
 

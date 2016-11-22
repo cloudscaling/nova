@@ -14,10 +14,11 @@
 #    under the License.
 
 import collections
-import fixtures
 import functools
-import mock
 import os
+
+import fixtures
+import mock
 import six
 
 from nova.virt.libvirt import config
@@ -138,7 +139,7 @@ class ImageBackendFixture(fixtures.Fixture):
             # Used directly by callers. These would have been set if called
             # the real constructor.
             setattr(disk, 'path', path)
-            setattr(disk, 'is_block_dev', False)
+            setattr(disk, 'is_block_dev', mock.sentinel.is_block_dev)
 
             # Used by tests. Note that image_init is a closure over image_type.
             setattr(disk, 'image_type', image_type)

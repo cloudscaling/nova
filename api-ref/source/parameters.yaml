@@ -8,7 +8,7 @@ tag_location:
   type: string
   min_version: 2.26
 x-openstack-request-id:
-  description: >
+  description: |
     A unique ID for tracking the request. The request ID associated with the request
     appears in the log lines for that request. By default, the middleware configuration
     ensures that the request ID appears in the log files.
@@ -17,12 +17,6 @@ x-openstack-request-id:
   type: string
 
 # variables in path
-admin_tenant_id:
-  description: |
-    The UUID of the administrative tenant.
-  in: path
-  required: true
-  type: string
 agent_build_id:
   description: |
     The id of the agent build.
@@ -64,18 +58,6 @@ before_timestamp:
 cell_id:
   description: |
     The UUID of the cell.
-  in: path
-  required: true
-  type: string
-certificate_id:
-  description: |
-    The certificate ID, as a string. The only valid value is ``root``.
-  in: path
-  required: true
-  type: string
-class_id:
-  description: |
-    The UUID of the quota class.
   in: path
   required: true
   type: string
@@ -181,6 +163,12 @@ keypair_name_path:
   in: path
   required: true
   type: string
+migration_id_path:
+  description: |
+    The ID of the server migration.
+  in: path
+  required: true
+  type: integer
 network_id:
   description: |
     The UUID of the network.
@@ -269,12 +257,6 @@ tenant_id:
 volume_id_path:
   description: |
     The unique ID for a volume.
-  in: path
-  required: true
-  type: string
-volume_type_id:
-  description: |
-    The unique ID for a volume type.
   in: path
   required: true
   type: string
@@ -418,14 +400,6 @@ flavor_query:
   description: |
     Filters the response by a flavor, as a UUID. A flavor is a combination of memory,
     disk size, and CPUs.
-  in: query
-  required: false
-  type: string
-host_query:
-  description: |
-    Filters the response by a host name, as a string. This query parameter is typically
-    available to only administrative users. If you are a non-administrative user,
-    the API ignores this parameter.
   in: query
   required: false
   type: string
@@ -806,10 +780,11 @@ addFixedIp:
   type: string
 addFloatingIp:
   description: |
-    The action.
+    The action. Contains required floating IP ``address`` and optional
+    ``fixed_address``.
   in: body
   required: true
-  type: string
+  type: object
 address:
   description: |
     The floating IP address.
@@ -1409,9 +1384,9 @@ data:
 delete_on_termination:
   description: |
     To delete the boot volume when the server is destroyed, specify ``true``.
-    Otherwise, specify ``false``.
+    Otherwise, specify ``false``. Default: ``false``
   in: body
-  required: true
+  required: false
   type: string
 deleted:
   description: |
@@ -1439,12 +1414,6 @@ deleted_at:
 description:
   description: |
     Security group description.
-  in: body
-  required: true
-  type: string
-description_2:
-  description: |
-    The security group description.
   in: body
   required: true
   type: string
@@ -2010,6 +1979,13 @@ force_live_migrate:
   required: false
   type: boolean
   min_version: 2.30
+force_migration_complete:
+  description: |
+    The action.
+  in: body
+  required: true
+  type: string
+  min_version: 2.22
 force_snapshot:
   description: |
     Indicates whether to create a snapshot, even if the volume is attached.
@@ -2406,12 +2382,6 @@ images:
   in: body
   required: true
   type: array
-in_use:
-  description: |
-    The in-use quota value.
-  in: body
-  required: true
-  type: integer
 injected_file_content_bytes:
   description: |
     The number of allowed bytes of content for each injected file.
@@ -2711,13 +2681,14 @@ keypair_type:
   description: |
     The type of the keypair. Allowed values are ``ssh`` or ``x509``
   min_version: 2.2
+# NOTE(mriedem): This is the user_id description for the keypair create/show
+# response which has always been returned.
 keypair_userid:
   in: body
   required: true
   type: string
   description: |
     The user_id for a keypair.
-  min_version: 2.10
 keypair_userid_in:
   in: body
   required: false
@@ -2751,12 +2722,6 @@ limits_absolutes:
   in: body
   required: true
   type: object
-limits_rate_regex:
-  description: |
-    A regular expression defining the URI path to apply the limit to.
-  in: body
-  required: true
-  type: string
 limits_rate_uri:
   description: |
     A human readable URI that is used as a friendly description of where the api rate limit is applied.
@@ -2939,6 +2904,96 @@ migrate:
   in: body
   required: true
   type: string
+migrate_dest_compute:
+  description: |
+    The target compute for a migration.
+  in: body
+  required: true
+  type: string
+migrate_dest_host:
+  description: |
+    The target host for a migration.
+  in: body
+  required: true
+  type: string
+migrate_dest_node:
+  description: |
+    The target node for a migration.
+  in: body
+  required: true
+  type: string
+migrate_disk_processed_bytes:
+  description: |
+    The amount of disk, in bytes, that has been processed during the migration.
+  in: body
+  required: true
+  type: integer
+migrate_disk_remaining_bytes:
+  description: |
+    The amount of disk, in bytes, that still needs to be migrated.
+  in: body
+  required: true
+  type: integer
+migrate_disk_total_bytes:
+  description: |
+    The total amount of disk, in bytes, that needs to be migrated.
+  in: body
+  required: true
+  type: integer
+migrate_memory_processed_bytes:
+  description: |
+    The amount of memory, in bytes, that has been processed during the migration.
+  in: body
+  required: true
+  type: integer
+migrate_memory_remaining_bytes:
+  description: |
+    The amount of memory, in bytes, that still needs to be migrated.
+  in: body
+  required: true
+  type: integer
+migrate_memory_total_bytes:
+  description: |
+    The total amount of memory, in bytes, that needs to be migrated.
+  in: body
+  required: true
+  type: integer
+migrate_source_compute:
+  description: |
+    The source compute for a migration.
+  in: body
+  required: true
+  type: string
+migrate_source_node:
+  description: |
+    The source node for a migration.
+  in: body
+  required: true
+  type: string
+migrate_status:
+  description: |
+    The current status of the migration.
+  in: body
+  required: true
+  type: string
+migration:
+  description: |
+    The server migration object.
+  in: body
+  required: true
+  type: object
+migration_id:
+  description: |
+    The ID of the server migration.
+  in: body
+  required: true
+  type: integer
+migrations:
+  description: |
+    The list of server migration objects.
+  in: body
+  required: true
+  type: array
 minDisk_body:
   description: |
     The minimum amount of disk space an image requires to boot, in GiB. For example, ``100``.
@@ -2956,31 +3011,6 @@ name:
     The security group name.
   in: body
   required: true
-  type: string
-name_3:
-  description: |
-    The name to associate with the keypair.
-  in: body
-  required: true
-  type: string
-name_4:
-  description: |
-    The source security group name.
-  in: body
-  required: true
-  type: string
-name_5:
-  description: |
-    The server group name. A non-empty string with no leading or trailing spaces.
-    Maximum length is 255 characters.
-  in: body
-  required: true
-  type: string
-name_9:
-  description: |
-    The name of floating IP pools.
-  in: body
-  required: false
   type: string
 name_server_group:
   description: |
@@ -3069,13 +3099,6 @@ new_file:
   in: body
   required: true
   type: string
-next:
-  description: |
-    Moves to the next metadata item.
-  format: uri
-  in: body
-  required: false
-  type: string
 on_shared_storage:
   description: |
     Server on shared storage.
@@ -3158,7 +3181,14 @@ OS-EXT-SRV-ATTR:instance_name:
   type: string
 OS-EXT-STS:power_state:
   description: |
-    The power state of the instance.
+    The power state of the instance. This is an enum value that is mapped as::
+
+      0: NOSTATE
+      1: RUNNING
+      3: PAUSED
+      4: SHUTDOWN
+      6: CRASHED
+      7: SUSPENDED
   in: body
   required: true
   type: integer
@@ -3695,7 +3725,7 @@ security_group_default_rules:
     A list of the ``security_group_default_rule`` object.
   in: body
   required: true
-  type: object
+  type: array
 security_group_rule:
   description: |
     A ``security_group_rule`` object.
@@ -3755,12 +3785,6 @@ security_groups_quota_optional:
   required: false
   type: integer
 server:
-  description: |
-    A ``server`` object.
-  in: body
-  required: true
-  type: object
-server_2:
   description: |
     A ``server`` object.
   in: body

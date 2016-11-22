@@ -2175,6 +2175,9 @@ class ComputeManager(manager.Manager):
         if notify:
             self._notify_about_instance_usage(context, instance,
                                               "shutdown.start")
+            compute_utils.notify_about_instance_action(context, instance,
+                    self.host, action=fields.NotificationAction.SHUTDOWN,
+                    phase=fields.NotificationPhase.START)
 
         network_info = compute_utils.get_nw_info_for_instance(instance)
 
@@ -2250,6 +2253,9 @@ class ComputeManager(manager.Manager):
         if notify:
             self._notify_about_instance_usage(context, instance,
                                               "shutdown.end")
+            compute_utils.notify_about_instance_action(context, instance,
+                    self.host, action=fields.NotificationAction.SHUTDOWN,
+                    phase=fields.NotificationPhase.END)
 
     def _cleanup_volumes(self, context, instance_uuid, bdms, raise_exc=True):
         exc_info = None
@@ -2425,6 +2431,11 @@ class ComputeManager(manager.Manager):
 
             self._notify_about_instance_usage(context, instance,
                                               "power_off.start")
+
+            compute_utils.notify_about_instance_action(context, instance,
+                        self.host, action=fields.NotificationAction.POWER_OFF,
+                        phase=fields.NotificationPhase.START)
+
             self._power_off_instance(context, instance, clean_shutdown)
             instance.power_state = self._get_power_state(context, instance)
             instance.vm_state = vm_states.STOPPED
@@ -2432,6 +2443,10 @@ class ComputeManager(manager.Manager):
             instance.save(expected_task_state=expected_task_state)
             self._notify_about_instance_usage(context, instance,
                                               "power_off.end")
+
+            compute_utils.notify_about_instance_action(context, instance,
+                        self.host, action=fields.NotificationAction.POWER_OFF,
+                        phase=fields.NotificationPhase.END)
 
         do_stop_instance()
 
@@ -3568,13 +3583,16 @@ class ComputeManager(manager.Manager):
             instance.node = migration.source_node
             instance.save()
 
-            migration.dest_compute = migration.source_compute
-            with migration.obj_as_admin():
-                migration.save()
-
             self.network_api.setup_networks_on_host(context, instance,
                                                     migration.source_compute)
             migration_p = obj_base.obj_to_primitive(migration)
+            # NOTE(hanrong): we need to change migration_p['dest_compute'] to
+            # source host temporarily. "network_api.migrate_instance_finish"
+            # will setup the network for the instance on the destination host.
+            # For revert resize, the instance will back to the source host, the
+            # setup of the network for instance should be on the source host.
+            # So set the migration_p['dest_compute'] to source host at here.
+            migration_p['dest_compute'] = migration.source_compute
             self.network_api.migrate_instance_finish(context,
                                                      instance,
                                                      migration_p)
@@ -4033,12 +4051,18 @@ class ComputeManager(manager.Manager):
         context = context.elevated()
         LOG.info(_LI('Unpausing'), instance=instance)
         self._notify_about_instance_usage(context, instance, 'unpause.start')
+        compute_utils.notify_about_instance_action(context, instance,
+            self.host, action=fields.NotificationAction.UNPAUSE,
+            phase=fields.NotificationPhase.START)
         self.driver.unpause(instance)
         instance.power_state = self._get_power_state(context, instance)
         instance.vm_state = vm_states.ACTIVE
         instance.task_state = None
         instance.save(expected_task_state=task_states.UNPAUSING)
         self._notify_about_instance_usage(context, instance, 'unpause.end')
+        compute_utils.notify_about_instance_action(context, instance,
+            self.host, action=fields.NotificationAction.UNPAUSE,
+            phase=fields.NotificationPhase.END)
 
     @wrap_exception()
     def host_power_action(self, context, action):
@@ -4332,6 +4356,10 @@ class ComputeManager(manager.Manager):
                            node):
         LOG.info(_LI('Unshelving'), instance=instance)
         self._notify_about_instance_usage(context, instance, 'unshelve.start')
+        compute_utils.notify_about_instance_action(context, instance,
+                self.host, action=fields.NotificationAction.UNSHELVE,
+                phase=fields.NotificationPhase.START)
+
         instance.task_state = task_states.SPAWNING
         instance.save()
 
@@ -4386,6 +4414,9 @@ class ComputeManager(manager.Manager):
         instance.save(expected_task_state=task_states.SPAWNING)
         self._update_scheduler_instance_info(context, instance)
         self._notify_about_instance_usage(context, instance, 'unshelve.end')
+        compute_utils.notify_about_instance_action(context, instance,
+                self.host, action=fields.NotificationAction.UNSHELVE,
+                phase=fields.NotificationPhase.END)
 
     @messaging.expected_exceptions(NotImplementedError)
     @wrap_instance_fault
@@ -5025,7 +5056,8 @@ class ComputeManager(manager.Manager):
         image_meta = objects.ImageMeta.from_instance(instance)
 
         try:
-            self.driver.attach_interface(instance, image_meta, network_info[0])
+            self.driver.attach_interface(context, instance, image_meta,
+                                         network_info[0])
         except exception.NovaException as ex:
             port_id = network_info[0].get('id')
             LOG.warning(_LW("attach interface failed , try to deallocate "
@@ -5057,7 +5089,7 @@ class ComputeManager(manager.Manager):
             raise exception.PortNotFound(_("Port %s is not "
                                            "attached") % port_id)
         try:
-            self.driver.detach_interface(instance, condemned)
+            self.driver.detach_interface(context, instance, condemned)
         except exception.NovaException as ex:
             LOG.warning(_LW("Detach interface failed, port_id=%(port_id)s,"
                             " reason: %(msg)s"),
@@ -5269,7 +5301,7 @@ class ComputeManager(manager.Manager):
                               dest, instance=instance)
                 self._set_migration_status(migration, 'error')
                 self._rollback_live_migration(context, instance, dest,
-                                              block_migration, migrate_data)
+                                              migrate_data)
 
         self._set_migration_status(migration, 'running')
 
@@ -5477,8 +5509,15 @@ class ComputeManager(manager.Manager):
 
         # Define domain at destination host, without doing it,
         # pause/suspend/terminate do not work.
-        self.compute_rpcapi.post_live_migration_at_destination(ctxt,
-                instance, block_migration, dest)
+        try:
+            self.compute_rpcapi.post_live_migration_at_destination(ctxt,
+                    instance, block_migration, dest)
+        except Exception as error:
+            # We don't want to break _post_live_migration() if
+            # post_live_migration_at_destination() fails as it should never
+            # affect cleaning up source node.
+            LOG.exception(_LE("Post live migration at destination %s failed"),
+                    dest, instance=instance, error=error)
 
         do_cleanup, destroy_disks = self._live_migration_cleanup_flags(
                 migrate_data)
@@ -5603,7 +5642,7 @@ class ComputeManager(manager.Manager):
     @wrap_exception()
     @wrap_instance_fault
     def _rollback_live_migration(self, context, instance,
-                                 dest, block_migration, migrate_data=None,
+                                 dest, migrate_data=None,
                                  migration_status='error'):
         """Recovers Instance/volume state from migrating -> running.
 
@@ -5612,7 +5651,6 @@ class ComputeManager(manager.Manager):
         :param dest:
             This method is called from live migration src host.
             This param specifies destination host.
-        :param block_migration: if true, prepare for block migration
         :param migrate_data:
             if not none, contains implementation specific data.
         :param migration_status:
@@ -6683,7 +6721,7 @@ class ComputeManager(manager.Manager):
                                  instance,
                                  nw_info=network_info)
                 try:
-                    self.driver.detach_interface(instance, vif)
+                    self.driver.detach_interface(context, instance, vif)
                 except exception.NovaException as ex:
                     LOG.warning(_LW("Detach interface failed, "
                                     "port_id=%(port_id)s, reason: %(msg)s"),
@@ -6751,7 +6789,7 @@ class ComputeManager(manager.Manager):
                    'soft_deleted': False,
                    'host': CONF.host,
                    'cleaned': False}
-        attrs = ['info_cache', 'security_groups', 'system_metadata']
+        attrs = ['system_metadata']
         with utils.temporary_mutation(context, read_deleted='yes'):
             instances = objects.InstanceList.get_by_filters(
                 context, filters, expected_attrs=attrs, use_slave=True)

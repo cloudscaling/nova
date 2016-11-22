@@ -10,9 +10,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import mock
-
 from keystoneauth1 import exceptions as ks_exc
+import mock
 
 import nova.conf
 from nova import context
@@ -372,7 +371,7 @@ class SchedulerReportClientTestCase(test.NoDBTestCase):
                 'total': compute_node.vcpus,
                 'reserved': 0,
                 'min_unit': 1,
-                'max_unit': 1,
+                'max_unit': compute_node.vcpus,
                 'step_size': 1,
                 'allocation_ratio': compute_node.cpu_allocation_ratio,
             },
@@ -380,7 +379,7 @@ class SchedulerReportClientTestCase(test.NoDBTestCase):
                 'total': compute_node.memory_mb,
                 'reserved': CONF.reserved_host_memory_mb,
                 'min_unit': 1,
-                'max_unit': 1,
+                'max_unit': compute_node.memory_mb,
                 'step_size': 1,
                 'allocation_ratio': compute_node.ram_allocation_ratio,
             },
@@ -388,7 +387,7 @@ class SchedulerReportClientTestCase(test.NoDBTestCase):
                 'total': compute_node.local_gb,
                 'reserved': CONF.reserved_host_disk_mb * 1024,
                 'min_unit': 1,
-                'max_unit': 1,
+                'max_unit': compute_node.local_gb,
                 'step_size': 1,
                 'allocation_ratio': compute_node.disk_allocation_ratio,
             },
@@ -480,7 +479,7 @@ class TestInventory(SchedulerReportClientTestCase):
                     'total': 8,
                     'reserved': 0,
                     'min_unit': 1,
-                    'max_unit': 1,
+                    'max_unit': compute_node.vcpus,
                     'step_size': 1,
                     'allocation_ratio': compute_node.cpu_allocation_ratio,
                 },
@@ -488,7 +487,7 @@ class TestInventory(SchedulerReportClientTestCase):
                     'total': 1024,
                     'reserved': CONF.reserved_host_memory_mb,
                     'min_unit': 1,
-                    'max_unit': 1,
+                    'max_unit': compute_node.memory_mb,
                     'step_size': 1,
                     'allocation_ratio': compute_node.ram_allocation_ratio,
                 },
@@ -496,7 +495,7 @@ class TestInventory(SchedulerReportClientTestCase):
                     'total': 10,
                     'reserved': CONF.reserved_host_disk_mb * 1024,
                     'min_unit': 1,
-                    'max_unit': 1,
+                    'max_unit': compute_node.local_gb,
                     'step_size': 1,
                     'allocation_ratio': compute_node.disk_allocation_ratio,
                 },
@@ -520,7 +519,7 @@ class TestInventory(SchedulerReportClientTestCase):
                     'total': 8,
                     'reserved': 0,
                     'min_unit': 1,
-                    'max_unit': 1,
+                    'max_unit': compute_node.vcpus,
                     'step_size': 1,
                     'allocation_ratio': compute_node.cpu_allocation_ratio,
                 },
@@ -528,7 +527,7 @@ class TestInventory(SchedulerReportClientTestCase):
                     'total': 1024,
                     'reserved': CONF.reserved_host_memory_mb,
                     'min_unit': 1,
-                    'max_unit': 1,
+                    'max_unit': compute_node.memory_mb,
                     'step_size': 1,
                     'allocation_ratio': compute_node.ram_allocation_ratio,
                 },
@@ -536,7 +535,7 @@ class TestInventory(SchedulerReportClientTestCase):
                     'total': 10,
                     'reserved': CONF.reserved_host_disk_mb * 1024,
                     'min_unit': 1,
-                    'max_unit': 1,
+                    'max_unit': compute_node.local_gb,
                     'step_size': 1,
                     'allocation_ratio': compute_node.disk_allocation_ratio,
                 },

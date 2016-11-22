@@ -30,6 +30,7 @@ from nova.objects import fields
 _ALLOC_TBL = models.Allocation.__table__
 _INV_TBL = models.Inventory.__table__
 _RP_TBL = models.ResourceProvider.__table__
+_RC_TBL = models.ResourceClass.__table__
 _RC_CACHE = None
 
 LOG = logging.getLogger(__name__)
@@ -159,8 +160,8 @@ def _update_inventory_for_provider(conn, rp, inv_list, to_update):
                         allocation_ratio=inv_record.allocation_ratio)
         res = conn.execute(upd_stmt)
         if not res.rowcount:
-            raise exception.NotFound(
-                'No inventory of class %s found for update' % rc_str)
+            raise exception.InventoryWithResourceClassNotFound(
+                    resource_class=rc_str)
     return exceeded
 
 
@@ -191,12 +192,13 @@ def _increment_provider_generation(conn, rp):
 
 @db_api.api_context_manager.writer
 def _add_inventory(context, rp, inventory):
-    """Add one Inventory that wasn't already on the provider."""
+    """Add one Inventory that wasn't already on the provider.
+
+    :raises `exception.ResourceClassNotFound` if inventory.resource_class
+            cannot be found in either the standard classes or the DB.
+    """
     _ensure_rc_cache(context)
     rc_id = _RC_CACHE.id_from_string(inventory.resource_class)
-    if rc_id is None:
-        raise exception.NotFound("No such resource class '%s'" %
-                                 inventory.resource_class)
     inv_list = InventoryList(objects=[inventory])
     conn = context.session.connection()
     with conn.begin():
@@ -207,12 +209,13 @@ def _add_inventory(context, rp, inventory):
 
 @db_api.api_context_manager.writer
 def _update_inventory(context, rp, inventory):
-    """Update an inventory already on the provider."""
+    """Update an inventory already on the provider.
+
+    :raises `exception.ResourceClassNotFound` if inventory.resource_class
+            cannot be found in either the standard classes or the DB.
+    """
     _ensure_rc_cache(context)
     rc_id = _RC_CACHE.id_from_string(inventory.resource_class)
-    if rc_id is None:
-        raise exception.NotFound("No such resource class '%s'" %
-                                 inventory.resource_class)
     inv_list = InventoryList(objects=[inventory])
     conn = context.session.connection()
     with conn.begin():
@@ -224,7 +227,11 @@ def _update_inventory(context, rp, inventory):
 
 @db_api.api_context_manager.writer
 def _delete_inventory(context, rp, resource_class):
-    """Delete up to one Inventory of the given resource_class string."""
+    """Delete up to one Inventory of the given resource_class string.
+
+    :raises `exception.ResourceClassNotFound` if resource_class
+            cannot be found in either the standard classes or the DB.
+    """
     _ensure_rc_cache(context)
     conn = context.session.connection()
     rc_id = _RC_CACHE.id_from_string(resource_class)
@@ -251,6 +258,9 @@ def _set_inventory(context, rp, inv_list):
             the same resource provider's view of its inventory or allocations
             in between the time when this object was originally read
             and the call to set the inventory.
+    :raises `exception.ResourceClassNotFound` if any resource class in any
+            inventory in inv_list cannot be found in either the standard
+            classes or the DB.
     """
     _ensure_rc_cache(context)
     conn = context.session.connection()
@@ -421,7 +431,9 @@ class ResourceProvider(base.NovaObject):
         result = context.session.query(models.ResourceProvider).filter_by(
             uuid=uuid).first()
         if not result:
-            raise exception.NotFound()
+            raise exception.NotFound(
+            'No resource provider with uuid %s found'
+            % uuid)
         return result
 
 
@@ -695,9 +707,14 @@ def _check_capacity_exceeded(conn, allocs):
     the inventories involved having their capacity exceeded.
 
     Raises an InvalidAllocationCapacityExceeded exception if any inventory
-    would be exhausted by the allocation. If no inventories would be exceeded
-    by the allocation, the function returns a list of `ResourceProvider`
-    objects that contain the generation at the time of the check.
+    would be exhausted by the allocation. Raises an
+    InvalidAllocationConstraintsViolated exception if any of the `step_size`,
+    `min_unit` or `max_unit` constraints in an inventory will be violated
+    by any one of the allocations.
+
+    If no inventories would be exceeded or violated by the allocations, the
+    function returns a list of `ResourceProvider` objects that contain the
+    generation at the time of the check.
 
     :param conn: SQLalchemy Connection object to use
     :param allocs: List of `Allocation` objects to check
@@ -757,6 +774,9 @@ def _check_capacity_exceeded(conn, allocs):
         _INV_TBL.c.total,
         _INV_TBL.c.reserved,
         _INV_TBL.c.allocation_ratio,
+        _INV_TBL.c.min_unit,
+        _INV_TBL.c.max_unit,
+        _INV_TBL.c.step_size,
         usage.c.used,
     ]
 
@@ -791,6 +811,28 @@ def _check_capacity_exceeded(conn, allocs):
         usage = usage_map[key]
         amount_needed = alloc.used
         allocation_ratio = usage['allocation_ratio']
+        min_unit = usage['min_unit']
+        max_unit = usage['max_unit']
+        step_size = usage['step_size']
+
+        # check min_unit, max_unit, step_size
+        if (amount_needed < min_unit or amount_needed > max_unit or
+                amount_needed % step_size != 0):
+            LOG.warning(
+                _LW("Allocation for %(rc)s on resource provider %(rp)s "
+                    "violates min_unit, max_unit, or step_size. "
+                    "Requested: %(requested)s, min_unit: %(min_unit)s, "
+                    "max_unit: %(max_unit)s, step_size: %(step_size)s"),
+                {'rc': alloc.resource_class,
+                 'rp': rp_uuid,
+                 'requested': amount_needed,
+                 'min_unit': min_unit,
+                 'max_unit': max_unit,
+                 'step_size': step_size})
+            raise exception.InvalidAllocationConstraintsViolated(
+                resource_class=alloc.resource_class,
+                resource_provider=rp_uuid)
+
         # usage["used"] can be returned as None
         used = usage['used'] or 0
         capacity = (usage['total'] - usage['reserved']) * allocation_ratio
@@ -853,16 +895,19 @@ class AllocationList(base.ObjectListBase, base.NovaObject):
 
         We must check that there is capacity for each allocation.
         If there is not we roll back the entire set.
+
+        :raises `exception.ResourceClassNotFound` if any resource class in any
+                allocation in allocs cannot be found in either the standard
+                classes or the DB.
         """
         _ensure_rc_cache(context)
         conn = context.session.connection()
 
         # Short-circuit out if there are any allocations with string
-        # resource class names that don't exist.
+        # resource class names that don't exist this will raise a
+        # ResourceClassNotFound exception.
         for alloc in allocs:
-            if _RC_CACHE.id_from_string(alloc.resource_class) is None:
-                raise exception.NotFound("No such resource class '%s'" %
-                                         alloc.resource_class)
+            _RC_CACHE.id_from_string(alloc.resource_class)
 
         # Before writing any allocation records, we check that the submitted
         # allocations do not cause any inventory capacity to be exceeded for
@@ -995,3 +1040,51 @@ class UsageList(base.ObjectListBase, base.NovaObject):
     def __repr__(self):
         strings = [repr(x) for x in self.objects]
         return "UsageList[" + ", ".join(strings) + "]"
+
+
+@base.NovaObjectRegistry.register
+class ResourceClass(base.NovaObject):
+    # Version 1.0: Initial version
+    VERSION = '1.0'
+
+    fields = {
+        'id': fields.IntegerField(read_only=True),
+        'name': fields.ResourceClassField(read_only=True),
+    }
+
+    @staticmethod
+    def _from_db_object(context, target, source):
+        for field in target.fields:
+            setattr(target, field, source[field])
+
+        target._context = context
+        target.obj_reset_changes()
+        return target
+
+
+@base.NovaObjectRegistry.register
+class ResourceClassList(base.ObjectListBase, base.NovaObject):
+    # Version 1.0: Initial version
+    VERSION = '1.0'
+
+    fields = {
+        'objects': fields.ListOfObjectsField('ResourceClass'),
+    }
+
+    @staticmethod
+    @db_api.api_context_manager.reader
+    def _get_all(context):
+        _ensure_rc_cache(context)
+        standards = _RC_CACHE.get_standards()
+        customs = list(context.session.query(models.ResourceClass).all())
+        return standards + customs
+
+    @base.remotable_classmethod
+    def get_all(cls, context):
+        resource_classes = cls._get_all(context)
+        return base.obj_make_list(context, cls(context),
+                                  objects.ResourceClass, resource_classes)
+
+    def __repr__(self):
+        strings = [repr(x) for x in self.objects]
+        return "ResourceClassList[" + ", ".join(strings) + "]"

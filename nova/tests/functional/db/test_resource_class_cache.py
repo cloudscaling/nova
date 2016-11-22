@@ -13,6 +13,8 @@
 import mock
 
 from nova.db.sqlalchemy import resource_class_cache as rc_cache
+from nova import exception
+from nova.objects import fields
 from nova import test
 from nova.tests import fixtures
 
@@ -42,6 +44,14 @@ class TestResourceClassCache(test.TestCase):
 
         self.assertFalse(sel_mock.called)
 
+    def test_get_standards(self):
+        cache = rc_cache.ResourceClassCache(self.context)
+        standards = cache.get_standards()
+        self.assertEqual(len(standards), len(fields.ResourceClass.STANDARD))
+        names = (rc['name'] for rc in standards)
+        for name in fields.ResourceClass.STANDARD:
+            self.assertIn(name, names)
+
     def test_rc_cache_custom(self):
         """Test that non-standard, custom resource classes hit the database and
         return appropriate results, caching the results after a single
@@ -49,9 +59,12 @@ class TestResourceClassCache(test.TestCase):
         """
         cache = rc_cache.ResourceClassCache(self.context)
 
-        # Haven't added anything to the DB yet, so should return None
-        self.assertIsNone(cache.string_from_id(1001))
-        self.assertIsNone(cache.id_from_string("IRON_NFV"))
+        # Haven't added anything to the DB yet, so should raise
+        # ResourceClassNotFound
+        self.assertRaises(exception.ResourceClassNotFound,
+                          cache.string_from_id, 1001)
+        self.assertRaises(exception.ResourceClassNotFound,
+                          cache.id_from_string, "IRON_NFV")
 
         # Now add to the database and verify appropriate results...
         with self.context.session.connection() as conn:
@@ -69,3 +82,13 @@ class TestResourceClassCache(test.TestCase):
             self.assertEqual('IRON_NFV', cache.string_from_id(1001))
             self.assertEqual(1001, cache.id_from_string('IRON_NFV'))
             self.assertFalse(sel_mock.called)
+
+    def test_rc_cache_miss(self):
+        """Test that we raise ResourceClassNotFound if an unknown resource
+        class ID or string is searched for.
+        """
+        cache = rc_cache.ResourceClassCache(self.context)
+        self.assertRaises(exception.ResourceClassNotFound,
+                          cache.string_from_id, 99999999)
+        self.assertRaises(exception.ResourceClassNotFound,
+                          cache.id_from_string, 'UNKNOWN')

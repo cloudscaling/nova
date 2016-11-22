@@ -2108,7 +2108,6 @@ class XenAPIHostTestCase(stubs.XenAPITestBase):
                    group='xenserver')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
         self.context = context.get_admin_context()
-        self.flags(use_local=True, group='conductor')
         self.conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         self.instance = fake_instance.fake_db_instance(name='foo')
 
@@ -2968,7 +2967,6 @@ class XenAPIAggregateTestCase(stubs.XenAPITestBase):
                    host='host',
                    compute_driver='xenapi.XenAPIDriver',
                    default_availability_zone='avail_zone1')
-        self.flags(use_local=True, group='conductor')
         host_ref = xenapi_fake.get_all('host')[0]
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
         self.context = context.get_admin_context()
@@ -3651,8 +3649,7 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
         self.stubs.Set(self.conn._vmops._session, "call_xenapi",
                        fake_call_xenapi)
 
-        def recover_method(context, instance, destination_hostname,
-                        block_migration):
+        def recover_method(context, instance, destination_hostname):
             recover_method.called = True
         migrate_data = objects.XenapiLiveMigrateData(
             destination_sr_ref="foo",
@@ -3720,8 +3717,7 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
 
         self._add_default_live_migrate_stubs(self.conn)
 
-        def recover_method(context, instance, destination_hostname,
-                           block_migration):
+        def recover_method(context, instance, destination_hostname):
             recover_method.called = True
         # pass block_migration = True and migrate data
         migrate_data = objects.XenapiLiveMigrateData(

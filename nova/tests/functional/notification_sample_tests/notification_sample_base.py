@@ -12,10 +12,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import mock
 import os
 import time
 
+import mock
 from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslo_utils import fixture as utils_fixture
@@ -152,9 +152,8 @@ class NotificationSampleTestBase(test.TestCase,
             image_uuid='155d900f-4e14-4e4c-a73d-069cbf4541e6',
             flavor_id=flavor_id)
 
-        extra_params['return_reservation_id'] = True
-
         if extra_params:
+            extra_params['return_reservation_id'] = True
             server.update(extra_params)
 
         post = {'server': server}

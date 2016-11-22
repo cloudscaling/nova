@@ -181,7 +181,7 @@ class HyperVDriver(driver.ComputeDriver):
                                              instance.name)
 
     def get_volume_connector(self, instance):
-        return self._volumeops.get_volume_connector(instance)
+        return self._volumeops.get_volume_connector()
 
     def get_available_resource(self, nodename):
         return self._hostops.get_available_resource()
@@ -344,10 +344,10 @@ class HyperVDriver(driver.ComputeDriver):
     def manage_image_cache(self, context, all_instances):
         self._imagecache.update(context, all_instances)
 
-    def attach_interface(self, instance, image_meta, vif):
+    def attach_interface(self, context, instance, image_meta, vif):
         return self._vmops.attach_interface(instance, vif)
 
-    def detach_interface(self, instance, vif):
+    def detach_interface(self, context, instance, vif):
         return self._vmops.detach_interface(instance, vif)
 
     def rescue(self, context, instance, network_info, image_meta,

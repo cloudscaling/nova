@@ -947,7 +947,7 @@ def _numa_get_pagesize_constraints(flavor, image_meta):
     :param flavor: a Flavor object to read extra specs from
     :param image_meta: nova.objects.ImageMeta object instance
 
-    :raises: MemoryPagesSizeInvalid if flavor extra spec or image
+    :raises: MemoryPageSizeInvalid if flavor extra spec or image
              metadata provides an invalid hugepage value
     :raises: MemoryPageSizeForbidden if flavor extra spec request
              conflicts with image metadata request
@@ -1105,24 +1105,17 @@ def _get_realtime_mask(flavor, image):
     return image_mask or flavor_mask
 
 
-def vcpus_realtime_topology(vcpus_set, flavor, image):
-    """Partitions vcpus used for realtime and 'normal' vcpus.
-
-    According to a mask specified from flavor or image, returns set of
-    vcpus configured for realtime scheduler and set running as a
-    'normal' vcpus.
-    """
+def vcpus_realtime_topology(flavor, image):
+    """Determines instance vCPUs used as RT for a given spec"""
     mask = _get_realtime_mask(flavor, image)
     if not mask:
         raise exception.RealtimeMaskNotFoundOrInvalid()
 
-    vcpus_spec = format_cpu_spec(vcpus_set)
-    vcpus_rt = parse_cpu_spec(vcpus_spec + ", " + mask)
-    vcpus_em = vcpus_set - vcpus_rt
-    if len(vcpus_rt) < 1 or len(vcpus_em) < 1:
+    vcpus_rt = parse_cpu_spec("0-%d,%s" % (flavor.vcpus - 1, mask))
+    if len(vcpus_rt) < 1:
         raise exception.RealtimeMaskNotFoundOrInvalid()
 
-    return vcpus_rt, vcpus_em
+    return vcpus_rt
 
 
 def _numa_get_constraints_auto(nodes, flavor):
@@ -1220,7 +1213,7 @@ def numa_get_constraints(flavor, image_meta):
              nodes is less than 1 or not an integer
     :raises: exception.ImageNUMATopologyForbidden if an attempt is made
              to override flavor settings with image properties
-    :raises: exception.MemoryPagesSizeInvalid if flavor extra spec or
+    :raises: exception.MemoryPageSizeInvalid if flavor extra spec or
              image metadata provides an invalid hugepage value
     :raises: exception.MemoryPageSizeForbidden if flavor extra spec
              request conflicts with image metadata request

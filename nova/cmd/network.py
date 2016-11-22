@@ -39,23 +39,23 @@ LOG = logging.getLogger('nova.network')
 def main():
     config.parse_args(sys.argv)
     logging.setup(CONF, "nova")
+
+    if not CONF.cells.enable:
+        # TODO(mriedem): Make this a fatal error after the ocata-2 milestone.
+        LOG.warning(_LW('Nova network is deprecated and not supported '
+                        'except as required for CellsV1 deployments.'))
+
     utils.monkey_patch()
     objects.register_all()
 
     gmr.TextGuruMeditation.setup_autorun(version)
 
-    if not CONF.conductor.use_local:
-        cmd_common.block_db_access('nova-network')
-        objects_base.NovaObject.indirection_api = \
-            conductor_rpcapi.ConductorAPI()
-    else:
-        LOG.warning(_LW('Conductor local mode is deprecated and will '
-                        'be removed in a subsequent release'))
+    cmd_common.block_db_access('nova-network')
+    objects_base.NovaObject.indirection_api = conductor_rpcapi.ConductorAPI()
 
     LOG.warning(_LW('Nova network is deprecated and will be removed '
                     'in the future'))
     server = service.Service.create(binary='nova-network',
-                                    topic=CONF.network_topic,
-                                    db_allowed=CONF.conductor.use_local)
+                                    topic=CONF.network_topic)
     service.serve(server)
     service.wait()
