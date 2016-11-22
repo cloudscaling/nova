@@ -39,11 +39,14 @@ CONF = cfg.CONF
 
 VOLSIZE_MULTIPLE_GB = 8
 MAX_VOL_NAME_LENGTH = 31
-PROTECTION_DOMAIN_KEY = 'sio:pd_name'
-STORAGE_POOL_KEY = 'sio:sp_name'
-PROVISIONING_TYPE_KEY = 'sio:provisioning_type'
+PROTECTION_DOMAIN_KEY = 'disk:domain'
+STORAGE_POOL_KEY = 'disk:pool'
+PROVISIONING_TYPE_KEY = 'disk:provisioning_type'
 PROVISIONING_TYPES_MAP = {'thin': 'ThinProvisioned',
                           'thick': 'ThickProvisioned'}
+LEGACY_PROTECTION_DOMAIN_KEY = 'sio:pd_name'
+LEGACY_STORAGE_POOL_KEY = 'sio:sp_name'
+LEGACY_PROVISIONING_TYPE_KEY = 'sio:provisioning_type'
 NEW_SIZE_CHECK_INTERVAL = 1
 MAX_NEW_SIZE_CHECKS = 10
 
@@ -128,6 +131,56 @@ def _uuid_to_base64(uuid):
         encoded_name = encoded_name.decode('ascii')
     return encoded_name
 
+def _get_protection_domain_name(extra_specs):
+    pd_name = extra_specs.get(PROTECTION_DOMAIN_KEY)
+    if not pd_name:
+        pd_name = extra_specs.get(LEGACY_PROTECTION_DOMAIN_KEY)
+        if pd_name:
+            LOG.warning(
+                "Deprecated '%s' flavor key is used to specify ScaleIO "
+                "provisioning type. Please use '%s' instead.",
+                LEGACY_PROTECTION_DOMAIN_KEY, PROTECTION_DOMAIN_KEY)
+        else:
+            pd_name = CONF.scaleio.default_protection_domain_name
+    return pd_name.encode('utf8')
+
+def _get_storage_pool_name(extra_specs):
+    sp_name = extra_specs.get(STORAGE_POOL_KEY)
+    if not sp_name:
+        sp_name = extra_specs.get(LEGACY_STORAGE_POOL_KEY)
+        if sp_name:
+            LOG.warning(
+                "Deprecated '%s' flavor key is used to specify ScaleIO "
+                "provisioning type. Please use '%s' instead.",
+                LEGACY_STORAGE_POOL_KEY, STORAGE_POOL_KEY)
+        else:
+            sp_name = CONF.scaleio.default_storage_pool_name
+    return sp_name.encode('utf8')
+
+def _get_provisioning_type(extra_specs):
+    from_config = False
+    ptype = extra_specs.get(PROVISIONING_TYPE_KEY)
+    if not ptype:
+        ptype = extra_specs.get(LEGACY_PROVISIONING_TYPE_KEY)
+        if ptype:
+            LOG.warning(
+                "Deprecated '%s' flavor key is used to specify ScaleIO "
+                "provisioning type. Please use '%s' instead.",
+                LEGACY_PROVISIONING_TYPE_KEY, PROVISIONING_TYPE_KEY)
+        else:
+            ptype = CONF.scaleio.default_provisioning_type
+            from_config = True
+    if ptype in ['ThickProvisioned', 'ThinProvisioned']:
+        opt_source = ('config' if from_config else 'flavor')
+        value_to_use = {'ThickProvisioned': 'thick',
+                        'ThinProvisioned': 'thin'}[ptype]
+        LOG.warning(
+            "Deprecated provisioning type '%s' is specified in %s. "
+            "Please change the value to '%s', because it will not be "
+            "supported in next Nova releases.",
+            ptype, opt_source, value_to_use)
+    return ptype
+
 
 def _get_sdc_guid():
     global _sdc_guid
@@ -184,24 +237,9 @@ class SIODriver(object):
         :param extra_specs: A dict of instance flavor extra specs
         :return: ScaleIO id of the created volume
         """
-        pd_name = extra_specs.get(PROTECTION_DOMAIN_KEY,
-                                  CONF.scaleio.default_protection_domain_name
-                                  ).encode('utf8')
-        sp_name = extra_specs.get(STORAGE_POOL_KEY,
-                                  CONF.scaleio.default_storage_pool_name
-                                  ).encode('utf8')
-        ptype = extra_specs.get(PROVISIONING_TYPE_KEY,
-                                CONF.scaleio.default_provisioning_type)
-        if ptype in ['ThickProvisioned', 'ThinProvisioned']:
-            opt_source = ('flavor' if extra_specs.get(PROVISIONING_TYPE_KEY)
-                          else 'config')
-            value_to_use = {'ThickProvisioned': 'thick',
-                            'ThinProvisioned': 'thin'}[ptype]
-            LOG.warning(
-                "Deprecated provisioning type '%s' is specified in %s. "
-                "Please change the value to '%s', because it will not be "
-                "supported in next Nova releases.",
-                ptype, opt_source, value_to_use)
+        pd_name = _get_protection_domain_name(extra_specs)
+        sp_name = _get_storage_pool_name(extra_specs)
+        ptype = _get_provisioning_type(extra_specs)
         ptype = PROVISIONING_TYPES_MAP.get(ptype, ptype)
         vol_id, _name = self.ioctx.create_volume(name, pd_name, sp_name, ptype,
                                                  size / units.Gi)
@@ -380,10 +418,10 @@ class SIODriver(object):
         :return: Nothing
         """
 
-        if (extra_specs.get(PROTECTION_DOMAIN_KEY) ==
-                orig_extra_specs.get(PROTECTION_DOMAIN_KEY) and
-                extra_specs.get(STORAGE_POOL_KEY) ==
-                orig_extra_specs.get(STORAGE_POOL_KEY)):
+        if (_get_protection_domain_name(extra_specs) ==
+                _get_protection_domain_name(orig_extra_specs) and
+                _get_storage_pool_name(extra_specs) ==
+                _get_storage_pool_name(orig_extra_specs)):
             return
         size = self.get_volume_size(vol_id)
         tmp_name = name + '/#'
