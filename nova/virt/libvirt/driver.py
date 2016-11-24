@@ -3565,7 +3565,6 @@ class LibvirtDriver(driver.ComputeDriver):
                 diskconfig = self._get_guest_disk_config(
                     instance, config_name, disk_mapping, inst_type,
                     self._get_disk_config_image_type())
-                diskconfig.readonly = True
                 devices.append(diskconfig)
 
         for vol in block_device.get_bdms_to_connect(block_device_mapping,

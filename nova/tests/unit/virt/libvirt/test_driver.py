@@ -9503,6 +9503,36 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         migrate_data.serial_listen_addr = '127.0.0.1'
         self.assertEqual(migrate_data, result)
 
+    @mock.patch.object(imagebackend.Sio, 'connect_disks')
+    @mock.patch.object(os, 'mkdir')
+    @mock.patch('nova.virt.libvirt.utils.get_instance_path_at_destination')
+    @mock.patch('nova.virt.libvirt.driver.remotefs.'
+                'RemoteFilesystem.copy_file')
+    @mock.patch('nova.virt.configdrive.required_by', return_value=True)
+    def test_pre_live_migration_sio_with_config_drive(
+            self, mock_required_by, mock_copy_file, mock_get_instance_path,
+            mock_mkdir, mock_connect_disks):
+        self.flags(config_drive_format='iso9660')
+        self.flags(images_type='sio', group='libvirt')
+        fake_instance_path = os.path.join(cfg.CONF.instances_path,
+                                          '/fake_instance_uuid')
+        mock_get_instance_path.return_value = fake_instance_path
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+
+        instance = objects.Instance(**self.test_instance)
+        migrate_data = objects.LibvirtLiveMigrateData()
+        migrate_data.is_shared_instance_path = False
+        migrate_data.is_shared_block_storage = True
+        migrate_data.block_migration = False
+        migrate_data.instance_relative_path = 'foo'
+        src = "%s:%s/disk.config" % (instance.host, fake_instance_path)
+
+        drvr.pre_live_migration(
+            self.context, instance, None, [], None, migrate_data)
+
+        mock_copy_file.assert_called_once_with(src, fake_instance_path)
+
     @mock.patch('nova.virt.driver.block_device_info_get_mapping',
                 return_value=())
     def test_pre_live_migration_block_with_config_drive_mocked_with_vfat(
@@ -9760,7 +9790,6 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                                           migrate_data=migrate_data)
             connect_disks_mock.assert_called_once_with(instance)
             self.assertIsInstance(res, objects.LibvirtLiveMigrateData)
-            connect_disks_mock.reset_mock()
 
     def test_pre_live_migration_with_not_shared_instance_path(self):
         migrate_data = migrate_data_obj.LibvirtLiveMigrateData(
@@ -16750,6 +16779,14 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
         self._test_unrescue(instance)
         mock_destroy_volume.assert_called_once_with(
             mock.ANY, instance.uuid + '_disk.rescue')
+
+    @mock.patch('nova.virt.libvirt.storage.sio_utils.SIODriver')
+    def test_unrescue_sio(self, driver):
+        self.flags(images_type='sio', group='libvirt')
+        instance = objects.Instance(uuid=uuids.instance, id=1)
+        self._test_unrescue(instance)
+        driver.return_value.cleanup_rescue_volumes.assert_called_once_with(
+            instance)
 
     @mock.patch('shutil.rmtree')
     @mock.patch('nova.utils.execute')
