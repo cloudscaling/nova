@@ -44,11 +44,12 @@ STORAGE_POOL_KEY = 'disk:pool'
 PROVISIONING_TYPE_KEY = 'disk:provisioning_type'
 PROVISIONING_TYPES_MAP = {'thin': 'ThinProvisioned',
                           'thick': 'ThickProvisioned'}
+NEW_SIZE_CHECK_INTERVAL = 1
+MAX_NEW_SIZE_CHECKS = 10
+# These flavor keys are deprecated
 LEGACY_PROTECTION_DOMAIN_KEY = 'sio:pd_name'
 LEGACY_STORAGE_POOL_KEY = 'sio:sp_name'
 LEGACY_PROVISIONING_TYPE_KEY = 'sio:provisioning_type'
-NEW_SIZE_CHECK_INTERVAL = 1
-MAX_NEW_SIZE_CHECKS = 10
 
 _sdc_guid = None
 

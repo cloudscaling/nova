@@ -46,7 +46,7 @@ sio_opts = [
     cfg.StrOpt('server_certificate_path',
                help='Server certificate path.'),
     cfg.StrOpt('default_sdcguid',
-               help='The ScaleIO default SDC guid to use (test use only)'),
+               help='The ScaleIO default SDC guid to use'),
     cfg.StrOpt('default_protection_domain_name',
                deprecated_name='protection_domain_name',
                help='The ScaleIO default protection domain'),
