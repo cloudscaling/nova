@@ -6576,9 +6576,12 @@ class LibvirtDriver(driver.ComputeDriver):
                 self._create_images_and_backing(
                     context, instance, instance_dir, disk_info,
                     fallback_from_host=instance.host)
+
             if (configdrive.required_by(instance) and
+                    CONF.config_drive_format == 'iso9660' and
                     (not is_shared_block_storage or
-                     CONF.libvirt.images_type != 'rbd')):
+                     self._get_disk_config_image_type() !=
+                     CONF.libvirt.images_type)):
                 # NOTE(pkoniszewski): Due to a bug in libvirt iso config
                 # drive needs to be copied to destination prior to
                 # migration when instance path is not shared and block
@@ -6588,9 +6591,6 @@ class LibvirtDriver(driver.ComputeDriver):
                 # live migration will fail on copying iso config drive to
                 # destination and writing to read-only device.
                 # Please see bug/1246201 for more details.
-                # NOTE(ft): vfat's config drive is plugged as readonly device,
-                # because that libvirt does not copy it with block migration,
-                # so that we copy it in any case except RBD
                 src = "%s:%s/disk.config" % (instance.host, instance_dir)
                 self._remotefs.copy_file(src, instance_dir)
 

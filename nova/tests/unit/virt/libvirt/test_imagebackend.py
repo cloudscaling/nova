@@ -1678,7 +1678,9 @@ class PloopTestCase(_ImageTestCase, test.NoDBTestCase):
 
 
 class BackendTestCase(test.NoDBTestCase):
-    INSTANCE = objects.Instance(id=1, uuid=uuidutils.generate_uuid())
+    INSTANCE = objects.Instance(id=1, uuid=uuidutils.generate_uuid(),
+                                flavor=objects.Flavor(extra_specs={}),
+                                task_state=None)
     NAME = 'name.su'
 
     def setUp(self):

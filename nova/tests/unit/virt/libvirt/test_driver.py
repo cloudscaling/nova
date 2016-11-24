@@ -9732,10 +9732,12 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                                       objects.LibvirtLiveMigrateData)
 
     def test_pre_live_migration_disks_connected(self):
-        migrate_data = {'is_shared_block_storage': True,
-                        'is_shared_instance_path': False,
-                        'instance_relative_path': 'bar',
-                        'block_migration': False}
+        migrate_data = migrate_data_obj.LibvirtLiveMigrateData(
+            is_shared_block_storage=True,
+            is_shared_instance_path=False,
+            block_migration=False,
+            instance_relative_path='foo',
+        )
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         instance = objects.Instance(**self.test_instance)
@@ -9759,15 +9761,6 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             connect_disks_mock.assert_called_once_with(instance)
             self.assertIsInstance(res, objects.LibvirtLiveMigrateData)
             connect_disks_mock.reset_mock()
-
-            migrate_data['is_shared_block_storage'] = False
-            migrate_data['instance_relative_path'] = 'foo'
-            res = drvr.pre_live_migration(self.context, instance,
-                                          block_device_info=None,
-                                          network_info=[],
-                                          disk_info=disk_info_json,
-                                          migrate_data=migrate_data)
-            self.assertFalse(connect_disks_mock.called)
 
     def test_pre_live_migration_with_not_shared_instance_path(self):
         migrate_data = migrate_data_obj.LibvirtLiveMigrateData(
