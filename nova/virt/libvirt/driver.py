@@ -7314,7 +7314,6 @@ class LibvirtDriver(driver.ComputeDriver):
                          block_device_info=None, power_on=True):
         LOG.debug("Starting finish_migration", instance=instance)
 
-        self.image_backend.backend().connect_disks(instance, with_no_wait=True)
         block_disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                                   instance,
                                                   image_meta,
