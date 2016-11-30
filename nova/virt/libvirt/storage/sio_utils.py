@@ -430,7 +430,7 @@ class SIODriver(object):
         try:
             self.ioctx.attach_volume(new_id, _get_sdc_guid())
             if not is_mapped:
-                self.ioctx.attach_volume(vol_id)
+                self.ioctx.attach_volume(vol_id, _get_sdc_guid())
             new_path = self.ioctx.get_volumepath(new_id)
             old_path = self.ioctx.get_volumepath(vol_id)
             utils.execute('dd',

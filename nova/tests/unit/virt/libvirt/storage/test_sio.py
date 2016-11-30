@@ -19,7 +19,7 @@ from nova.virt.libvirt.storage import sio_utils
 CONF = cfg.CONF
 
 
-class FakeException(BaseException):
+class FakeException(Exception):
     pass
 
 
@@ -85,15 +85,11 @@ class SioTestCase(test.NoDBTestCase):
             self.vol_size_Gb)
 
     def test_remove_volume(self):
-        self.ioctx.delete_volume.return_value = None
-
         self.driver.remove_volume(self.vol_id)
         self.ioctx.delete_volume.assert_called_with(
             self.vol_id, unmap_on_delete=False)
 
     def test_remove_volume_by_name(self):
-        self.ioctx.delete_volume.return_value = None
-
         self.driver.remove_volume(self.vol_name, ignore_mappings=True)
         self.ioctx.delete_volume.assert_called_with(
             self.vol_name, unmap_on_delete=True)
@@ -111,7 +107,6 @@ class SioTestCase(test.NoDBTestCase):
             self.vol_id, unmap_on_delete=False)
 
     def test_map_volume(self):
-        self.ioctx.attach_volume.return_value = None
         self.ioctx.get_volumepath.return_value = '/a/b/c'
 
         self.driver.map_volume(self.vol_id, with_no_wait=True)
@@ -137,7 +132,6 @@ class SioTestCase(test.NoDBTestCase):
             self.vol_id, with_no_wait=False)
 
     def test_unmap_volume(self):
-        self.ioctx.detach_volume.return_value = None
         self.driver.unmap_volume(self.vol_id)
         self.ioctx.detach_volume.assert_called_with(
             self.vol_id, self.sdc_uuid)
@@ -214,7 +208,177 @@ class SioTestCase(test.NoDBTestCase):
         self.ioctx.get_volumepath.assert_called_with(self.vol_id)
 
     def test_get_volume_size(self):
-        self.ioctx.get_volumesize.return_value = 2
+        self.ioctx.get_volumesize.return_value = self.vol_size / 1024
         result = self.driver.get_volume_size(self.vol_id)
-        self.assertEqual(2 * 1024, result)
+        self.assertEqual(self.vol_size, result)
         self.ioctx.get_volumesize.assert_called_with(self.vol_id)
+
+    @mock.patch.object(sio_utils, 'images')
+    def test_import_image(self, mock_images):
+        img_info = mock.Mock()
+        setattr(img_info, 'file_format', 'fake')
+        mock_images.qemu_img_info.return_value = img_info
+
+        self.driver.import_image('a', 'b')
+        mock_images.convert_image.assert_called_with('a', 'b', 'fake', 'raw',
+                                                     run_as_root=True)
+
+    @mock.patch.object(sio_utils, 'images')
+    def test_export_image(self, mock_images):
+        self.driver.export_image('b', 'a', 'c')
+        mock_images.convert_image.assert_called_with('b', 'a', 'raw', 'c',
+                                                     run_as_root=True)
+
+    def test_extend_volume_without_path(self):
+        self.ioctx.get_volumepath.return_value = None
+        self.driver.extend_volume(self.vol_id, self.vol_size)
+        self.ioctx.extend_volume.assert_called_with(self.vol_id,
+                                                    self.vol_size_Gb)
+        self.ioctx.get_volumepath.assert_called_with(self.vol_id,
+                                                     with_no_wait=True)
+
+    @mock.patch.object(sio_utils, 'utils')
+    def test_extend_volume_with_path(self, mock_utils):
+        self.ioctx.get_volumepath.return_value = '/a/b'
+        mock_utils.execute.return_value = (self.vol_size, None)
+
+        self.driver.extend_volume(self.vol_id, self.vol_size)
+
+        self.ioctx.extend_volume.assert_called_with(self.vol_id,
+                                                    self.vol_size_Gb)
+        self.ioctx.get_volumepath.assert_called_with(self.vol_id,
+                                                     with_no_wait=True)
+        mock_utils.execute.assert_called_with('blockdev', '--getsize64',
+                                              '/a/b', run_as_root=True)
+
+        # with resize error
+        mock_utils.execute.return_value = (2 * (self.vol_size + 1), None)
+        self.driver.extend_volume(self.vol_id, self.vol_size)
+        mock_utils.execute.assert_called_with('blockdev', '--getsize64',
+                                              '/a/b', run_as_root=True)
+
+    def test_move_volume_not_moved(self):
+        specs = {'disk:domain': 'a', 'disk:pool': 'b'}
+        self.driver.move_volume(self.vol_id, self.vol_name, specs, specs)
+
+    @mock.patch.object(sio_utils, 'utils')
+    def test_move_volume(self, mock_utils):
+        orig_specs = {'disk:domain': 'aa', 'disk:pool': 'bb'}
+
+        self.ioctx.get_volumesize.return_value = self.vol_size / 1024
+        self.ioctx.create_volume.return_value = ('new_id', 'fake_name')
+        self.ioctx.get_volumepath.side_effect = (
+            lambda x: '/a/b/c' if x == self.vol_id else '/c/b/a')
+        mock_utils.execute.return_value = (self.vol_size, None)
+
+        self.driver.move_volume(self.vol_id, self.vol_name, {}, orig_specs)
+
+        self.ioctx.get_volumesize.assert_called_with(self.vol_id)
+        self.ioctx.create_volume.assert_called_with(
+            self.vol_name + '/#', 'fpd', 'fsp', 'ThickProvisioned',
+            self.vol_size_Gb)
+        self.ioctx.attach_volume.assert_has_calls(
+            [mock.call('new_id', self.sdc_uuid),
+             mock.call(self.vol_id, self.sdc_uuid)])
+        self.ioctx.get_volumepath.assert_has_calls(
+            [mock.call('new_id'), mock.call(self.vol_id)])
+        mock_utils.execute.assert_called_with(
+            'dd', 'if=/a/b/c', 'of=/c/b/a', 'bs=1M', 'iflag=direct',
+            run_as_root=True)
+        self.ioctx.delete_volume.assert_called_with(
+            self.vol_id, unmap_on_delete=True)
+        self.ioctx.detach_volume.assert_called_with(
+            'new_id', self.sdc_uuid)
+        self.ioctx.rename_volume.assert_called_with(
+            'new_id', self.vol_name)
+
+    def test_move_volume_error(self):
+        orig_specs = {'disk:domain': 'aa', 'disk:pool': 'bb'}
+
+        self.ioctx.get_volumesize.return_value = self.vol_size / 1024
+        self.ioctx.create_volume.return_value = ('new_id', 'fake_name')
+        self.ioctx.attach_volume.side_effect = FakeException
+
+        self.assertRaises(FakeException, self.driver.move_volume,
+                          self.vol_id, self.vol_name, {}, orig_specs)
+
+        self.ioctx.get_volumesize.assert_called_with(self.vol_id)
+        self.ioctx.create_volume.assert_called_with(
+            self.vol_name + '/#', 'fpd', 'fsp', 'ThickProvisioned',
+            self.vol_size_Gb)
+        self.ioctx.delete_volume.assert_called_with(
+            'new_id', unmap_on_delete=True)
+
+    def test_snapshot_volume(self):
+        self.driver.snapshot_volume(self.vol_id, 'snap_name')
+        self.ioctx.snapshot_volume.assert_called_with(self.vol_id, 'snap_name')
+
+    def test_rollback_to_snapshot(self):
+        self.ioctx.get_volumeid.return_value = 'snap_id'
+
+        self.driver.rollback_to_snapshot(
+            self.vol_id, self.vol_name, 'snap_name')
+
+        self.ioctx.get_volumeid.assert_called_with('snap_name')
+        self.ioctx.delete_volume.assert_called_with(
+            self.vol_id, unmap_on_delete=True)
+        self.ioctx.rename_volume.assert_called_with(
+            'snap_id', self.vol_name)
+        self.ioctx.attach_volume.assert_called_with(
+            'snap_id', self.sdc_uuid)
+
+    def test_map_volumes(self):
+        uuid = 'b0d0b498-1fe2-479e-995c-80ace2f339a7'
+        self.ioctx.list_volume_infos.return_value = [
+            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#1', 'id': '0-1'},
+            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#2', 'id': '0-2'}]
+
+        instance = mock.Mock()
+        setattr(instance, 'uuid', uuid)
+        self.driver.map_volumes(instance)
+
+        self.ioctx.list_volume_infos.assert_called_with()
+        self.ioctx.attach_volume.assert_has_calls(
+            [mock.call('0-1', '00-00-00'), mock.call('0-2', '00-00-00')])
+        self.ioctx.get_volumepath.assert_has_calls(
+            [mock.call('0-1', with_no_wait=True),
+             mock.call('0-2', with_no_wait=True)])
+
+    def test_cleanup_volumes(self):
+        uuid = 'b0d0b498-1fe2-479e-995c-80ace2f339a7'
+        self.ioctx.list_volume_infos.return_value = [
+            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#1', 'id': '0-1'},
+            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#2', 'id': '0-2'}]
+
+        instance = mock.Mock()
+        setattr(instance, 'uuid', uuid)
+        self.driver.cleanup_volumes(instance)
+
+        self.ioctx.list_volume_infos.assert_called_with()
+        self.ioctx.delete_volume.assert_has_calls(
+            [mock.call('0-1', unmap_on_delete=True),
+             mock.call('0-2', unmap_on_delete=True)])
+
+    def test_cleanup_volumes_unmap_only(self):
+        uuid = 'b0d0b498-1fe2-479e-995c-80ace2f339a7'
+        self.ioctx.list_volume_infos.return_value = [
+            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#1', 'id': '0-1'},
+            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#2', 'id': '0-2'}]
+
+        instance = mock.Mock()
+        setattr(instance, 'uuid', uuid)
+        self.driver.cleanup_volumes(instance, unmap_only=True)
+
+        self.ioctx.list_volume_infos.assert_called_with()
+        self.ioctx.detach_volume.assert_has_calls(
+            [mock.call('0-1', '00-00-00'), mock.call('0-2', '00-00-00')])
+
+    def test_cleanup_rescue_volumes(self):
+        uuid = 'b0d0b498-1fe2-479e-995c-80ace2f339a7'
+
+        instance = mock.Mock()
+        setattr(instance, 'uuid', uuid)
+        self.driver.cleanup_rescue_volumes(instance)
+
+        self.ioctx.delete_volume.assert_called_with(
+            'sNC0mB/iR56ZXICs4vM5pw==rescue', unmap_on_delete=True)
