@@ -78,7 +78,8 @@ def choose_volume_size(requested_size):
     :param requested_size: Size in bytes
     :return: The smallest allowed size in bytes of ScaleIO volume.
     """
-    return -(-requested_size / (units.Gi * VOLSIZE_MULTIPLE_GB)) * units.Gi
+    k = units.Gi * VOLSIZE_MULTIPLE_GB
+    return -(-requested_size / k) * k
 
 
 def get_sio_volume_name(instance, disk_name):

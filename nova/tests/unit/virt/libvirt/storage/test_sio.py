@@ -12,26 +12,34 @@
 
 import mock
 from oslo_config import cfg
+from oslo_utils import units
 
+from nova import exception
 from nova import test
 from nova.virt.libvirt.storage import sio_utils
+from nova.virt.libvirt import utils as libvirt_utils
+
 
 CONF = cfg.CONF
+
+
+TEST_UUID = 'b0d0b498-1fe2-479e-995c-80ace2f339a7'
+TEST_BASE64_ID = 'sNC0mB/iR56ZXICs4vM5pw=='
 
 
 class FakeException(Exception):
     pass
 
 
-class SioTestCase(test.NoDBTestCase):
+class SioDriverTestCase(test.NoDBTestCase):
 
     @mock.patch.object(sio_utils, 'siolib')
     def setUp(self, mock_siolib):
-        super(SioTestCase, self).setUp()
+        super(SioDriverTestCase, self).setUp()
 
         self.vol_name = u'volume-00000001'
         self.vol_size_Gb = 3
-        self.vol_size = self.vol_size_Gb * (1024 ** 3)
+        self.vol_size = self.vol_size_Gb * units.Gi
         self.vol_id = '1x2x3x4x5x'
         self.sdc_uuid = '00-00-00'
 
@@ -208,7 +216,7 @@ class SioTestCase(test.NoDBTestCase):
         self.ioctx.get_volumepath.assert_called_with(self.vol_id)
 
     def test_get_volume_size(self):
-        self.ioctx.get_volumesize.return_value = self.vol_size / 1024
+        self.ioctx.get_volumesize.return_value = self.vol_size / units.Ki
         result = self.driver.get_volume_size(self.vol_id)
         self.assertEqual(self.vol_size, result)
         self.ioctx.get_volumesize.assert_called_with(self.vol_id)
@@ -265,7 +273,7 @@ class SioTestCase(test.NoDBTestCase):
     def test_move_volume(self, mock_utils):
         orig_specs = {'disk:domain': 'aa', 'disk:pool': 'bb'}
 
-        self.ioctx.get_volumesize.return_value = self.vol_size / 1024
+        self.ioctx.get_volumesize.return_value = self.vol_size / units.Ki
         self.ioctx.create_volume.return_value = ('new_id', 'fake_name')
         self.ioctx.get_volumepath.side_effect = (
             lambda x: '/a/b/c' if x == self.vol_id else '/c/b/a')
@@ -295,7 +303,7 @@ class SioTestCase(test.NoDBTestCase):
     def test_move_volume_error(self):
         orig_specs = {'disk:domain': 'aa', 'disk:pool': 'bb'}
 
-        self.ioctx.get_volumesize.return_value = self.vol_size / 1024
+        self.ioctx.get_volumesize.return_value = self.vol_size / units.Ki
         self.ioctx.create_volume.return_value = ('new_id', 'fake_name')
         self.ioctx.attach_volume.side_effect = FakeException
 
@@ -328,13 +336,12 @@ class SioTestCase(test.NoDBTestCase):
             'snap_id', self.sdc_uuid)
 
     def test_map_volumes(self):
-        uuid = 'b0d0b498-1fe2-479e-995c-80ace2f339a7'
         self.ioctx.list_volume_infos.return_value = [
-            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#1', 'id': '0-1'},
-            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#2', 'id': '0-2'}]
+            {'name': TEST_BASE64_ID + '#1', 'id': '0-1'},
+            {'name': TEST_BASE64_ID + '#2', 'id': '0-2'}]
 
         instance = mock.Mock()
-        setattr(instance, 'uuid', uuid)
+        setattr(instance, 'uuid', TEST_UUID)
         self.driver.map_volumes(instance)
 
         self.ioctx.list_volume_infos.assert_called_with()
@@ -345,13 +352,12 @@ class SioTestCase(test.NoDBTestCase):
              mock.call('0-2', with_no_wait=True)])
 
     def test_cleanup_volumes(self):
-        uuid = 'b0d0b498-1fe2-479e-995c-80ace2f339a7'
         self.ioctx.list_volume_infos.return_value = [
-            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#1', 'id': '0-1'},
-            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#2', 'id': '0-2'}]
+            {'name': TEST_BASE64_ID + '#1', 'id': '0-1'},
+            {'name': TEST_BASE64_ID + '#2', 'id': '0-2'}]
 
         instance = mock.Mock()
-        setattr(instance, 'uuid', uuid)
+        setattr(instance, 'uuid', TEST_UUID)
         self.driver.cleanup_volumes(instance)
 
         self.ioctx.list_volume_infos.assert_called_with()
@@ -360,13 +366,12 @@ class SioTestCase(test.NoDBTestCase):
              mock.call('0-2', unmap_on_delete=True)])
 
     def test_cleanup_volumes_unmap_only(self):
-        uuid = 'b0d0b498-1fe2-479e-995c-80ace2f339a7'
         self.ioctx.list_volume_infos.return_value = [
-            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#1', 'id': '0-1'},
-            {'name': 'sNC0mB/iR56ZXICs4vM5pw==#2', 'id': '0-2'}]
+            {'name': TEST_BASE64_ID + '#1', 'id': '0-1'},
+            {'name': TEST_BASE64_ID + '#2', 'id': '0-2'}]
 
         instance = mock.Mock()
-        setattr(instance, 'uuid', uuid)
+        setattr(instance, 'uuid', TEST_UUID)
         self.driver.cleanup_volumes(instance, unmap_only=True)
 
         self.ioctx.list_volume_infos.assert_called_with()
@@ -374,11 +379,87 @@ class SioTestCase(test.NoDBTestCase):
             [mock.call('0-1', '00-00-00'), mock.call('0-2', '00-00-00')])
 
     def test_cleanup_rescue_volumes(self):
-        uuid = 'b0d0b498-1fe2-479e-995c-80ace2f339a7'
-
         instance = mock.Mock()
-        setattr(instance, 'uuid', uuid)
+        setattr(instance, 'uuid', TEST_UUID)
         self.driver.cleanup_rescue_volumes(instance)
 
         self.ioctx.delete_volume.assert_called_with(
-            'sNC0mB/iR56ZXICs4vM5pw==rescue', unmap_on_delete=True)
+            TEST_BASE64_ID + 'rescue', unmap_on_delete=True)
+
+
+class SioUtilsTestCase(test.NoDBTestCase):
+
+    def setUp(self):
+        super(SioUtilsTestCase, self).setUp()
+
+    def test_uuid_to_base64(self):
+        result = sio_utils._uuid_to_base64(TEST_UUID)
+        self.assertEqual(TEST_BASE64_ID, result)
+
+    def test_verify_volume_size(self):
+        sio_utils.verify_volume_size(8 * units.Gi)
+
+        self.assertRaises(
+            exception.NovaException, sio_utils.verify_volume_size, 0)
+        self.assertRaises(
+            exception.NovaException, sio_utils.verify_volume_size,
+            8 * units.Gi - 1)
+        self.assertRaises(
+            exception.NovaException, sio_utils.verify_volume_size,
+            8 * units.Gi + 1)
+
+    def test_choose_volume_size(self):
+        self.assertEqual(8, sio_utils.VOLSIZE_MULTIPLE_GB)
+        # smaller than 8 Gb
+        result = sio_utils.choose_volume_size(5 * units.Gi)
+        self.assertEqual(8 * units.Gi, result)
+        result = sio_utils.choose_volume_size(8 * units.Gi - 1)
+        self.assertEqual(8 * units.Gi, result)
+        # equal to 8 Gb
+        result = sio_utils.choose_volume_size(8 * units.Gi)
+        self.assertEqual(8 * units.Gi, result)
+        # more than 8 Gb
+        result = sio_utils.choose_volume_size(8 * units.Gi + 1)
+        self.assertEqual(16 * units.Gi, result)
+        result = sio_utils.choose_volume_size(16 * units.Gi - 1)
+        self.assertEqual(16 * units.Gi, result)
+
+    def test_get_sio_volume_name(self):
+        instance = mock.Mock()
+        setattr(instance, 'uuid', TEST_UUID)
+
+        result = sio_utils.get_sio_volume_name(instance, 'fake')
+        self.assertEqual(TEST_BASE64_ID + 'fake', result)
+
+        result = sio_utils.get_sio_volume_name(instance, 'disk.fake')
+        self.assertEqual(TEST_BASE64_ID + 'fake', result)
+
+        result = sio_utils.get_sio_volume_name(instance, 'disk')
+        self.assertEqual(TEST_BASE64_ID, result)
+
+        # max 7 chars for disk name
+        sio_utils.get_sio_volume_name(instance, 'fake123')
+        self.assertRaises(RuntimeError, sio_utils.get_sio_volume_name,
+                          instance, 'fake1234')
+
+    def test_get_sio_snapshot_name(self):
+        result = sio_utils.get_sio_snapshot_name(
+            'vol_name', libvirt_utils.RESIZE_SNAPSHOT_NAME)
+        self.assertEqual(result, 'vol_name/~')
+
+        result = sio_utils.get_sio_snapshot_name(
+            'vol_name', 'snap_name')
+        self.assertEqual(result, 'vol_name/snap_name')
+
+        # max 30 chars in two strings
+        sio_utils.get_sio_snapshot_name(
+            '123456789012345', '123456789012345')
+        self.assertRaises(RuntimeError, sio_utils.get_sio_snapshot_name,
+                          '1234567890123456', '123456789012345')
+
+    def test_is_sio_volume_rescuer(self):
+        result = sio_utils.is_sio_volume_rescuer('aaa')
+        self.assertFalse(result)
+
+        result = sio_utils.is_sio_volume_rescuer('aaa#rescue')
+        self.assertTrue(result)
