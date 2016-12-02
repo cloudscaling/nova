@@ -1677,6 +1677,52 @@ class PloopTestCase(_ImageTestCase, test.NoDBTestCase):
         image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
 
 
+class SioTestCase(_ImageTestCase, test.NoDBTestCase):
+
+    SIZE = 8192
+
+    def setUp(self):
+        sio_patcher = mock.patch.object(nova.virt.libvirt.storage.sio_utils,
+                                        'SIODriver', autospec=True)
+        self.sio_driver = sio_patcher.start().return_value
+        self.addCleanup(sio_patcher.stop)
+        self.sio_driver.get_volume_id.return_value = mock.sentinel.sio_id
+
+        self.image_class = imagebackend.Sio
+        super(SioTestCase, self).setUp()
+        self.INSTANCE.flavor = objects.Flavor(extra_specs={})
+        self.INSTANCE.task_state = None
+        self.libvirt_utils = imagebackend.libvirt_utils
+        self.utils = imagebackend.utils
+
+
+    def test_get_disk_size(self):
+        self.sio_driver.get_volume_size.return_value = (
+            mock.sentinel.volume_size)
+        disk = self.image_class(self.INSTANCE, self.NAME)
+        self.assertEqual(mock.sentinel.volume_size,
+                         disk.get_disk_size('fake'))
+        self.sio_driver.get_volume_size.assert_called_once_with(
+            mock.sentinel.sio_id)
+
+    def test_prealloc_image(self):
+        CONF.set_override('preallocate_images', 'space')
+
+        fake_processutils.fake_execute_clear_log()
+        fake_processutils.stub_out_processutils_execute(self)
+        disk = self.image_class(self.INSTANCE, self.NAME)
+
+        with test.nested(
+            mock.patch('os.path.exists', return_value=True),
+            mock.patch.object(disk, 'exists', return_value=True),
+            mock.patch.object(disk, 'get_disk_size', return_value=self.SIZE)
+        ) as (_mock_path_exists, _mock_disk_exists, _mock_disk_size):
+
+            disk.cache(mock.Mock(), self.TEMPLATE_PATH, self.SIZE)
+
+        self.assertEqual(fake_processutils.fake_execute_get_log(), [])
+
+
 class BackendTestCase(test.NoDBTestCase):
     INSTANCE = objects.Instance(id=1, uuid=uuidutils.generate_uuid(),
                                 flavor=objects.Flavor(extra_specs={}),

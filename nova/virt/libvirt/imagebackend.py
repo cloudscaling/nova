@@ -1224,12 +1224,12 @@ class Sio(Image):
         return imgmodel.SIOImage()
 
     def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
-                     extra_specs, hypervisor_version):
+                     extra_specs, hypervisor_version, boot_order=None):
         self.ensure_path()
 
         info = super(Sio, self).libvirt_info(
             disk_bus, disk_dev, device_type, cache_mode,
-            extra_specs, hypervisor_version)
+            extra_specs, hypervisor_version, boot_order)
 
         # set is_block_dev to select proper backend driver,
         # because ScaleIO volumes are block devices in fact
