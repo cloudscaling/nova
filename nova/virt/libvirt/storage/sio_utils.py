@@ -24,7 +24,7 @@ from oslo_utils import units
 import six
 
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LI, _LW
 from nova import utils
 from nova.virt import images
 from nova.virt.libvirt import utils as libvirt_utils
@@ -133,18 +133,22 @@ def _uuid_to_base64(uuid):
         encoded_name = encoded_name.decode('ascii')
     return encoded_name
 
+
 def _get_protection_domain_name(extra_specs):
     pd_name = extra_specs.get(PROTECTION_DOMAIN_KEY)
     if not pd_name:
         pd_name = extra_specs.get(LEGACY_PROTECTION_DOMAIN_KEY)
         if pd_name:
             LOG.warning(
-                "Deprecated '%s' flavor key is used to specify ScaleIO "
-                "provisioning type. Please use '%s' instead.",
-                LEGACY_PROTECTION_DOMAIN_KEY, PROTECTION_DOMAIN_KEY)
+                _LW("Deprecated '%(legacy_key)s' flavor key is used to "
+                    "specify ScaleIO provisioning type. Please use '%(key)s' "
+                    "instead."),
+                {'legacy_key': LEGACY_PROTECTION_DOMAIN_KEY,
+                 'key': PROTECTION_DOMAIN_KEY})
         else:
             pd_name = CONF.scaleio.default_protection_domain_name
     return pd_name.encode('utf8')
+
 
 def _get_storage_pool_name(extra_specs):
     sp_name = extra_specs.get(STORAGE_POOL_KEY)
@@ -152,12 +156,15 @@ def _get_storage_pool_name(extra_specs):
         sp_name = extra_specs.get(LEGACY_STORAGE_POOL_KEY)
         if sp_name:
             LOG.warning(
-                "Deprecated '%s' flavor key is used to specify ScaleIO "
-                "provisioning type. Please use '%s' instead.",
-                LEGACY_STORAGE_POOL_KEY, STORAGE_POOL_KEY)
+                _LW("Deprecated '%(legacy_key)s' flavor key is used to "
+                    "specify ScaleIO provisioning type. Please use '%(key)s' "
+                    "instead."),
+                {'legacy_key': LEGACY_STORAGE_POOL_KEY,
+                 'key': STORAGE_POOL_KEY})
         else:
             sp_name = CONF.scaleio.default_storage_pool_name
     return sp_name.encode('utf8')
+
 
 def _get_provisioning_type(extra_specs):
     from_config = False
@@ -166,21 +173,23 @@ def _get_provisioning_type(extra_specs):
         ptype = extra_specs.get(LEGACY_PROVISIONING_TYPE_KEY)
         if ptype:
             LOG.warning(
-                "Deprecated '%s' flavor key is used to specify ScaleIO "
-                "provisioning type. Please use '%s' instead.",
-                LEGACY_PROVISIONING_TYPE_KEY, PROVISIONING_TYPE_KEY)
+                _LW("Deprecated '%(legacy_key)s' flavor key is used to "
+                    "specify ScaleIO provisioning type. Please use '%(key)s' "
+                    "instead."),
+                {'legacy_key': LEGACY_PROVISIONING_TYPE_KEY,
+                 'key': PROVISIONING_TYPE_KEY})
         else:
             ptype = CONF.scaleio.default_provisioning_type
             from_config = True
     if ptype in ['ThickProvisioned', 'ThinProvisioned']:
-        opt_source = ('config' if from_config else 'flavor')
+        opt_source = (_('config') if from_config else _('flavor'))
         value_to_use = {'ThickProvisioned': 'thick',
                         'ThinProvisioned': 'thin'}[ptype]
         LOG.warning(
-            "Deprecated provisioning type '%s' is specified in %s. "
-            "Please change the value to '%s', because it will not be "
-            "supported in next Nova releases.",
-            ptype, opt_source, value_to_use)
+            _LW("Deprecated provisioning type '%(legacy_type)s' is specified "
+                "in %(source)s. Please change the value to '%(type)s', "
+                "because it will not be supported in next Nova releases."),
+            {'legacy_type': ptype, 'source': opt_source, 'type': value_to_use})
     return ptype
 
 
@@ -196,7 +205,7 @@ def _get_sdc_guid():
                 drv_cfg = 'drv_cfg'
             (out, _err) = utils.execute(drv_cfg, '--query_guid',
                                         run_as_root=True)
-            LOG.info('Acquire ScaleIO SDC guid %s', out)
+            LOG.info(_LI('Acquire ScaleIO SDC guid %s'), out)
             _sdc_guid = out
     return _sdc_guid
 
@@ -405,8 +414,9 @@ class SIODriver(object):
             try:
                 wait_for_new_size()
             except exception.ResizeError:
-                LOG.warning('Host system could not get new size of disk %s',
-                            vol_path)
+                LOG.warning(
+                    _LW('Host system could not get new size of disk %s'),
+                    vol_path)
 
     def move_volume(self, vol_id, name, extra_specs, orig_extra_specs,
                     is_mapped=False):

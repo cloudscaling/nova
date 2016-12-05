@@ -7151,7 +7151,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                                         block_device_info)
         root_disk = block_device.get_root_bdm(block_device_mapping)
         booted_from_volume = (
-            self._is_booted_from_volume(instance, disk_info_text) and root_disk)
+            self._is_booted_from_volume(instance, disk_info_text)
+            and root_disk)
         if (root_down and not booted_from_volume) or ephemeral_down:
             reason = _("Unable to resize disk down.")
             raise exception.InstanceFaultRollback(
