@@ -34,11 +34,8 @@ import six
 import six.moves.urllib.parse as urlparse
 
 from nova.api.metadata import base as instance_metadata
-from nova.compute import arch
-from nova.compute import hv_type
 from nova.compute import power_state
 from nova.compute import task_states
-from nova.compute import vm_mode
 from nova.compute import vm_states
 import nova.conf
 from nova.console import type as console_type
@@ -50,6 +47,7 @@ from nova.i18n import _LE
 from nova.i18n import _LI
 from nova.i18n import _LW
 from nova import objects
+from nova.objects import fields as obj_fields
 from nova import servicegroup
 from nova.virt import configdrive
 from nova.virt import driver as virt_driver
@@ -98,8 +96,8 @@ def _get_nodes_supported_instances(cpu_arch=None):
     if not cpu_arch:
         return []
     return [(cpu_arch,
-             hv_type.BAREMETAL,
-             vm_mode.HVM)]
+             obj_fields.HVType.BAREMETAL,
+             obj_fields.VMMode.HVM)]
 
 
 def _log_ironic_polling(what, node, instance):
@@ -223,7 +221,7 @@ class IronicDriver(virt_driver.ComputeDriver):
 
         raw_cpu_arch = node.properties.get('cpu_arch', None)
         try:
-            cpu_arch = arch.canonicalize(raw_cpu_arch)
+            cpu_arch = obj_fields.Architecture.canonicalize(raw_cpu_arch)
         except exception.InvalidArchitectureName:
             cpu_arch = None
         if not cpu_arch:

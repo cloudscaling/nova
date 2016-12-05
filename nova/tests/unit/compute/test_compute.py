@@ -45,7 +45,6 @@ from nova import availability_zones
 from nova import block_device
 from nova import compute
 from nova.compute import api as compute_api
-from nova.compute import arch
 from nova.compute import flavors
 from nova.compute import manager as compute_manager
 from nova.compute import power_state
@@ -284,7 +283,7 @@ class BaseTestCase(test.TestCase):
         inst.vcpus = 0
         inst.root_gb = 0
         inst.ephemeral_gb = 0
-        inst.architecture = arch.X86_64
+        inst.architecture = obj_fields.Architecture.X86_64
         inst.os_type = 'Linux'
         inst.system_metadata = (
             params and params.get('system_metadata', {}) or {})
@@ -4450,14 +4449,15 @@ class ComputeTestCase(BaseTestCase):
             mock.patch.object(self.compute.network_api,
                               'get_instance_nw_info'),
             mock.patch.object(self.compute, '_notify_about_instance_usage'),
+            mock.patch.object(compute_utils, 'notify_about_instance_action'),
             mock.patch.object(self.compute.driver, 'finish_migration'),
             mock.patch.object(self.compute, '_get_instance_block_device_info'),
             mock.patch.object(migration, 'save'),
             mock.patch.object(instance, 'save'),
             mock.patch.object(nova.quota.QUOTAS, 'commit')
         ) as (mock_setup, mock_net_mig, mock_get_nw, mock_notify,
-              mock_virt_mig, mock_get_blk, mock_mig_save, mock_inst_save,
-              mock_commit):
+              mock_notify_action, mock_virt_mig, mock_get_blk, mock_mig_save,
+              mock_inst_save, mock_commit):
             def _mig_save():
                 self.assertEqual(migration.status, 'finished')
                 self.assertEqual(vm_state, instance.vm_state)
@@ -4516,6 +4516,11 @@ class ComputeTestCase(BaseTestCase):
                           network_info='fake-nwinfo1'),
                 mock.call(self.context, instance, 'finish_resize.end',
                           network_info='fake-nwinfo1')])
+            mock_notify_action.assert_has_calls([
+                mock.call(self.context, instance, 'fake-mini',
+                          action='resize_finish', phase='start'),
+                mock.call(self.context, instance, 'fake-mini',
+                          action='resize_finish', phase='end')])
             # nova.conf sets the default flavor to m1.small and the test
             # sets the default flavor to m1.tiny so they should be different
             # which makes this a resize
@@ -6273,10 +6278,14 @@ class ComputeTestCase(BaseTestCase):
         admin_context = context.get_admin_context()
         deleted_at = (timeutils.utcnow() -
                       datetime.timedelta(hours=1, minutes=5))
-        instance1 = self._create_fake_instance_obj({"deleted_at": deleted_at,
-                                                    "deleted": True})
-        instance2 = self._create_fake_instance_obj({"deleted_at": deleted_at,
-                                                    "deleted": True})
+        instance1 = self._create_fake_instance_obj()
+        instance2 = self._create_fake_instance_obj()
+
+        timeutils.set_time_override(deleted_at)
+        instance1.destroy()
+        instance2.destroy()
+        timeutils.clear_time_override()
+
         self.flags(running_deleted_instance_timeout=3600,
                    running_deleted_instance_action=action)
 
@@ -7748,6 +7757,7 @@ class ComputeAPITestCase(BaseTestCase):
                 id=0, cpuset=set([1, 2]), memory=512),
                    objects.InstanceNUMACell(
                 id=1, cpuset=set([3, 4]), memory=512)])
+        numa_topology.obj_reset_changes()
         numa_constraints_mock.return_value = numa_topology
 
         instances, resv_id = self.compute_api.create(self.context, inst_type,
@@ -7956,38 +7966,6 @@ class ComputeAPITestCase(BaseTestCase):
                 self.fake_image['id'],
                 scheduler_hints={'group':
                                      '5b674f73-c8cf-40ef-9965-3b6fe4b304b1'})
-
-    def test_destroy_instance_disassociates_security_groups(self):
-        # Make sure destroying disassociates security groups.
-        group = self._create_group()
-
-        (ref, resv_id) = self.compute_api.create(
-                self.context,
-                instance_type=flavors.get_default_flavor(),
-                image_href=uuids.image_href_id,
-                security_groups=['testgroup'])
-
-        db.instance_destroy(self.context, ref[0]['uuid'])
-        group = db.security_group_get(self.context, group['id'],
-                                      columns_to_join=['instances'])
-        self.assertEqual(0, len(group['instances']))
-
-    def test_destroy_security_group_disassociates_instances(self):
-        # Make sure destroying security groups disassociates instances.
-        group = self._create_group()
-
-        (ref, resv_id) = self.compute_api.create(
-                self.context,
-                instance_type=flavors.get_default_flavor(),
-                image_href=uuids.image_href_id,
-                security_groups=['testgroup'])
-
-        db.security_group_destroy(self.context, group['id'])
-        admin_deleted_context = context.get_admin_context(
-                read_deleted="only")
-        group = db.security_group_get(admin_deleted_context, group['id'],
-                                      columns_to_join=['instances'])
-        self.assertEqual(0, len(group['instances']))
 
     def _test_rebuild(self, vm_state):
         instance = self._create_fake_instance_obj()
@@ -9021,7 +8999,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_instance_architecture(self):
         # Test the instance architecture.
         i_ref = self._create_fake_instance_obj()
-        self.assertEqual(i_ref['architecture'], arch.X86_64)
+        self.assertEqual(i_ref['architecture'], obj_fields.Architecture.X86_64)
 
     def test_instance_unknown_architecture(self):
         # Test if the architecture is unknown.
@@ -10147,7 +10125,7 @@ class ComputeAPITestCase(BaseTestCase):
         inst['vcpus'] = 0
         inst['root_gb'] = 0
         inst['ephemeral_gb'] = 0
-        inst['architecture'] = arch.X86_64
+        inst['architecture'] = obj_fields.Architecture.X86_64
         inst['os_type'] = 'Linux'
         instance = self._create_fake_instance_obj(inst)
 

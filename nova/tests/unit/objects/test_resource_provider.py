@@ -13,11 +13,14 @@
 import uuid
 
 import mock
+import six
 
+from nova import context
 from nova import exception
 from nova import objects
 from nova.objects import fields
 from nova.objects import resource_provider
+from nova import test
 from nova.tests.unit.objects import test_objects
 from nova.tests import uuidsentinel as uuids
 
@@ -31,7 +34,7 @@ VCPU_ID = objects.fields.ResourceClass.STANDARD.index(
 
 _RESOURCE_PROVIDER_ID = 1
 _RESOURCE_PROVIDER_UUID = uuids.resource_provider
-_RESOURCE_PROVIDER_NAME = uuids.resource_name
+_RESOURCE_PROVIDER_NAME = six.text_type(uuids.resource_name)
 _RESOURCE_PROVIDER_DB = {
     'id': _RESOURCE_PROVIDER_ID,
     'uuid': _RESOURCE_PROVIDER_UUID,
@@ -569,3 +572,22 @@ class TestUsageNoDB(test_objects._LocalTest):
         self.assertRaises(ValueError,
                           usage.obj_to_primitive,
                           target_version='1.0')
+
+
+class TestResourceClass(test.NoDBTestCase):
+
+    def setUp(self):
+        super(TestResourceClass, self).setUp()
+        self.user_id = 'fake-user'
+        self.project_id = 'fake-project'
+        self.context = context.RequestContext(self.user_id, self.project_id)
+
+    def test_cannot_create_with_id(self):
+        rc = objects.ResourceClass(self.context, id=1, name='CUSTOM_IRON_NFV')
+        exc = self.assertRaises(exception.ObjectActionError, rc.create)
+        self.assertIn('already created', str(exc))
+
+    def test_cannot_create_requires_name(self):
+        rc = objects.ResourceClass(self.context)
+        exc = self.assertRaises(exception.ObjectActionError, rc.create)
+        self.assertIn('name is required', str(exc))

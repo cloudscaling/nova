@@ -30,15 +30,13 @@ from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import versionutils
 
-from nova.compute import arch
-from nova.compute import hv_type
 from nova.compute import power_state
 from nova.compute import task_states
-from nova.compute import vm_mode
 import nova.conf
 from nova.console import type as ctype
 from nova import exception
 from nova.i18n import _LW
+from nova.objects import fields as obj_fields
 from nova.virt import diagnostics
 from nova.virt import driver
 from nova.virt import hardware
@@ -142,13 +140,16 @@ class FakeDriver(driver.ComputeDriver):
             memory_mb=self.memory_mb,
             local_gb=self.local_gb)
         self.host_status_base = {
-          'hypervisor_type': 'fake',
-          'hypervisor_version': versionutils.convert_version_to_int('1.0'),
-          'hypervisor_hostname': CONF.host,
-          'cpu_info': {},
-          'disk_available_least': 0,
-          'supported_instances': [(arch.X86_64, hv_type.FAKE, vm_mode.HVM)],
-          'numa_topology': None,
+            'hypervisor_type': 'fake',
+            'hypervisor_version': versionutils.convert_version_to_int('1.0'),
+            'hypervisor_hostname': CONF.host,
+            'cpu_info': {},
+            'disk_available_least': 0,
+            'supported_instances': [(
+                obj_fields.Architecture.X86_64,
+                obj_fields.HVType.FAKE,
+                obj_fields.VMMode.HVM)],
+            'numa_topology': None,
           }
         self._mounts = {}
         self._interfaces = {}
@@ -498,7 +499,7 @@ class FakeDriver(driver.ComputeDriver):
                          block_device_info=None, power_on=True):
         return
 
-    def confirm_migration(self, migration, instance, network_info):
+    def confirm_migration(self, context, migration, instance, network_info):
         return
 
     def pre_live_migration(self, context, instance, block_device_info,

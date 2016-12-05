@@ -2126,6 +2126,22 @@ class InventoryWithResourceClassNotFound(NotFound):
     msg_fmt = _("No inventory of class %(resource_class)s found.")
 
 
+class ResourceClassExists(NovaException):
+    msg_fmt = _("Resource class %(resource_class)s already exists.")
+
+
+class ResourceClassInUse(Invalid):
+    msg_fmt = _("Cannot delete resource class. Class is in use in inventory.")
+
+
+class ResourceClassCannotDeleteStandard(Invalid):
+    msg_fmt = _("Cannot delete standard resource class %(resource_class)s.")
+
+
+class ResourceClassCannotUpdateStandard(Invalid):
+    msg_fmt = _("Cannot update standard resource class %(resource_class)s.")
+
+
 class InvalidInventory(Invalid):
     msg_fmt = _("Inventory for '%(resource_class)s' on "
                 "resource provider '%(resource_provider)s' invalid.")

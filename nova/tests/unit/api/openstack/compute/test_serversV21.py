@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import base64
 import collections
 import datetime
 import uuid
@@ -24,7 +23,9 @@ import iso8601
 import mock
 from mox3 import mox
 from oslo_policy import policy as oslo_policy
+from oslo_serialization import base64
 from oslo_serialization import jsonutils
+from oslo_utils import encodeutils
 from oslo_utils import timeutils
 import six
 from six.moves import range
@@ -1837,7 +1838,7 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
                 "imageRef": self.image_uuid,
                 "personality": [{
                     "path": "/path/to/file",
-                    "contents": base64.b64encode("Test String"),
+                    "contents": base64.encode_as_text("Test String"),
                 }]
             },
         }
@@ -2359,8 +2360,8 @@ class ServersControllerCreateTest(test.TestCase):
         """Shared implementation for tests below that create instance."""
         super(ServersControllerCreateTest, self).setUp()
 
-        self.flags(verbose=True,
-                   enable_instance_password=True)
+        self.flags(verbose=True)
+        self.flags(enable_instance_password=True, group='api')
         self.instance_cache_num = 0
         self.instance_cache_by_id = {}
         self.instance_cache_by_uuid = {}
@@ -2744,9 +2745,9 @@ class ServersControllerCreateTest(test.TestCase):
 
     def test_create_instance_with_pass_disabled(self):
         # test with admin passwords disabled See lp bug 921814
-        self.flags(enable_instance_password=False)
+        self.flags(enable_instance_password=False, group='api')
 
-        self.flags(enable_instance_password=False)
+        self.flags(enable_instance_password=False, group='api')
         self.req.body = jsonutils.dump_as_bytes(self.body)
         res = self.controller.create(self.req, body=self.body).obj
 
@@ -2853,7 +2854,7 @@ class ServersControllerCreateTest(test.TestCase):
                           self.controller.create, req, body=body)
 
     def test_create_instance_pass_disabled(self):
-        self.flags(enable_instance_password=False)
+        self.flags(enable_instance_password=False, group='api')
         self.req.body = jsonutils.dump_as_bytes(self.body)
         res = self.controller.create(self.req, body=self.body).obj
 
@@ -3016,7 +3017,7 @@ class ServersControllerCreateTest(test.TestCase):
                          self.body['server']['adminPass'])
 
     def test_create_instance_admin_password_pass_disabled(self):
-        self.flags(enable_instance_password=False)
+        self.flags(enable_instance_password=False, group='api')
         self.body['server']['flavorRef'] = 3
         self.body['server']['adminPass'] = 'testpass'
         self.req.body = jsonutils.dump_as_bytes(self.body)
@@ -3038,7 +3039,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dump_as_bytes(self.body)
         robj = self.controller.create(self.req, body=self.body)
 
-        self.assertEqual(robj['Location'], selfhref)
+        self.assertEqual(encodeutils.safe_decode(robj['Location']), selfhref)
 
     def _do_test_create_instance_above_quota(self, resource, allowed, quota,
                                              expected_msg):
@@ -3259,8 +3260,7 @@ class ServersControllerCreateTest(test.TestCase):
 
     @mock.patch.object(compute_api.API, 'create',
                        side_effect=exception.InvalidNUMANodesNumber(
-                           nodes='-1',
-                           details=''))
+                           nodes='-1'))
     def test_create_instance_raise_invalid_numa_nodes(self, mock_create):
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create,
@@ -3313,7 +3313,8 @@ class ServersControllerCreateTest(test.TestCase):
     @mock.patch.object(compute_api.API, 'create')
     def test_create_instance_invalid_personality(self, mock_create):
         codec = 'utf8'
-        content = 'b25zLiINCg0KLVJpY2hhcmQgQ$$%QQmFjaA=='
+        content = encodeutils.safe_encode(
+                'b25zLiINCg0KLVJpY2hhcmQgQ$$%QQmFjaA==')
         start_position = 19
         end_position = 20
         msg = 'invalid start byte'
@@ -3622,8 +3623,8 @@ class ServersControllerCreateTestWithMock(test.TestCase):
         """Shared implementation for tests below that create instance."""
         super(ServersControllerCreateTestWithMock, self).setUp()
 
-        self.flags(verbose=True,
-                   enable_instance_password=True)
+        self.flags(verbose=True)
+        self.flags(enable_instance_password=True, group='api')
         self.instance_cache_num = 0
         self.instance_cache_by_id = {}
         self.instance_cache_by_uuid = {}

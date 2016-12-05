@@ -25,7 +25,7 @@ from nova.cmd import common as cmd_common
 from nova.conductor import rpcapi as conductor_rpcapi
 import nova.conf
 from nova import config
-from nova.i18n import _LW
+from nova.i18n import _LE, _LW
 from nova import objects
 from nova.objects import base as objects_base
 from nova import service
@@ -41,9 +41,9 @@ def main():
     logging.setup(CONF, "nova")
 
     if not CONF.cells.enable:
-        # TODO(mriedem): Make this a fatal error after the ocata-2 milestone.
-        LOG.warning(_LW('Nova network is deprecated and not supported '
-                        'except as required for CellsV1 deployments.'))
+        LOG.error(_LE('Nova network is deprecated and not supported '
+                      'except as required for CellsV1 deployments.'))
+        return 1
 
     utils.monkey_patch()
     objects.register_all()

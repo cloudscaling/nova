@@ -22,10 +22,10 @@ import copy
 
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
-from oslo_utils import importutils
 
 from nova.compute import claims
 from nova.compute import monitors
+from nova.compute import stats
 from nova.compute import task_states
 from nova.compute import vm_states
 import nova.conf
@@ -87,7 +87,7 @@ class ResourceTracker(object):
         self.pci_tracker = None
         self.nodename = nodename
         self.compute_node = None
-        self.stats = importutils.import_object(CONF.compute_stats_class)
+        self.stats = stats.Stats()
         self.tracked_instances = {}
         self.tracked_migrations = {}
         monitor_handler = monitors.MonitorHandler(self)
@@ -505,9 +505,9 @@ class ResourceTracker(object):
         declared a need for resources, but not necessarily retrieved them from
         the hypervisor layer yet.
         """
-        LOG.info(_LI("Auditing locally available compute resources for "
-                     "node %(node)s"),
-                 {'node': self.nodename})
+        LOG.debug("Auditing locally available compute resources for "
+                  "node %(node)s",
+                  {'node': self.nodename})
         resources = self.driver.get_available_resource(self.nodename)
         resources['host_ip'] = CONF.my_ip
 
@@ -591,8 +591,8 @@ class ResourceTracker(object):
 
         # update the compute_node
         self._update(context)
-        LOG.info(_LI('Compute_service record updated for %(host)s:%(node)s'),
-                     {'host': self.host, 'node': self.nodename})
+        LOG.debug('Compute_service record updated for %(host)s:%(node)s',
+                  {'host': self.host, 'node': self.nodename})
 
     def _get_compute_node(self, context):
         """Returns compute node for the host and nodename."""
@@ -649,10 +649,10 @@ class ResourceTracker(object):
         if vcpus:
             tcpu = vcpus
             ucpu = self.compute_node.vcpus_used
-            LOG.info(_LI("Total usable vcpus: %(tcpu)s, "
-                        "total allocated vcpus: %(ucpu)s"),
-                        {'tcpu': vcpus,
-                         'ucpu': ucpu})
+            LOG.debug("Total usable vcpus: %(tcpu)s, "
+                      "total allocated vcpus: %(ucpu)s",
+                      {'tcpu': vcpus,
+                       'ucpu': ucpu})
         else:
             tcpu = 0
             ucpu = 0

@@ -272,8 +272,8 @@ class InstanceStateUpdatePayload(base.NotificationPayloadBase):
 @base.notification_sample('instance-restore-start.json')
 @base.notification_sample('instance-restore-end.json')
 # @base.notification_sample('instance-evacuate.json')
-# @base.notification_sample('instance-resize_finish-start.json')
-# @base.notification_sample('instance-resize_finish-end.json')
+@base.notification_sample('instance-resize_finish-start.json')
+@base.notification_sample('instance-resize_finish-end.json')
 # @base.notification_sample('instance-live_migration_pre-start.json')
 # @base.notification_sample('instance-live_migration_pre-end.json')
 # @base.notification_sample('instance-live_migration_abort-start.json')
@@ -304,6 +304,8 @@ class InstanceStateUpdatePayload(base.NotificationPayloadBase):
 # @base.notification_sample('instance-unrescue-end.json')
 @base.notification_sample('instance-unshelve-start.json')
 @base.notification_sample('instance-unshelve-end.json')
+@base.notification_sample('instance-create-start.json')
+@base.notification_sample('instance-create-end.json')
 @nova_base.NovaObjectRegistry.register_notification
 class InstanceActionNotification(base.NotificationBase):
     # Version 1.0: Initial version
