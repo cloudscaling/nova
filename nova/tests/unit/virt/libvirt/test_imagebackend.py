@@ -28,6 +28,7 @@ from oslo_utils import imageutils
 from oslo_utils import units
 from oslo_utils import uuidutils
 
+from nova.compute import task_states
 import nova.conf
 from nova import context
 from nova import exception
@@ -40,6 +41,7 @@ from nova.virt import images
 from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt import imagebackend
 from nova.virt.libvirt.storage import rbd_utils
+from nova.virt.libvirt.storage import sio_utils
 
 CONF = nova.conf.CONF
 
@@ -1679,11 +1681,10 @@ class PloopTestCase(_ImageTestCase, test.NoDBTestCase):
 
 class SioTestCase(_ImageTestCase, test.NoDBTestCase):
 
-    SIZE = 8192
+    SIZE = 8 * units.Gi
 
     def setUp(self):
-        sio_patcher = mock.patch.object(nova.virt.libvirt.storage.sio_utils,
-                                        'SIODriver', autospec=True)
+        sio_patcher = mock.patch.object(sio_utils, 'SIODriver', autospec=True)
         self.sio_driver = sio_patcher.start().return_value
         self.addCleanup(sio_patcher.stop)
         self.sio_driver.get_volume_id.return_value = mock.sentinel.sio_id
@@ -1694,7 +1695,6 @@ class SioTestCase(_ImageTestCase, test.NoDBTestCase):
         self.INSTANCE.task_state = None
         self.libvirt_utils = imagebackend.libvirt_utils
         self.utils = imagebackend.utils
-
 
     def test_get_disk_size(self):
         self.sio_driver.get_volume_size.return_value = (
@@ -1721,6 +1721,200 @@ class SioTestCase(_ImageTestCase, test.NoDBTestCase):
             disk.cache(mock.Mock(), self.TEMPLATE_PATH, self.SIZE)
 
         self.assertEqual(fake_processutils.fake_execute_get_log(), [])
+
+    def test_libvirt_info(self):
+        super(SioTestCase, self).test_libvirt_info()
+        self.sio_driver.get_volume_path.assert_called_once_with(
+            mock.sentinel.sio_id)
+
+    @mock.patch('os.path.exists')
+    def _test_cache_exists(self, mock_path_exists, template_exists=True):
+        if template_exists:
+            mock_path_exists.return_value = True
+        else:
+            mock_path_exists.side_effect = lambda p: (
+                False if p == self.TEMPLATE_PATH else True)
+        self.sio_driver.get_volume_size.return_value = self.SIZE
+        disk = self.image_class(self.INSTANCE, self.NAME)
+        with mock.patch.object(disk, 'connect_disk') as mock_connect_disk:
+            disk.cache(mock.Mock(), self.TEMPLATE_PATH, self.SIZE)
+            mock_connect_disk.assert_called_once_with()
+
+    def test_cache_exists(self):
+        self._test_cache_exists(template_exists=True)
+
+    def test_cache_exists_no_template(self):
+        self._test_cache_exists(template_exists=False)
+
+    @mock.patch('nova.virt.disk.api.get_disk_size')
+    @mock.patch('os.path.exists')
+    def _test_cache_root(self, mock_path_exists, mock_get_disk_size,
+                         template_exists=True, rescue=False):
+        self.sio_driver.get_volume_id.return_value = None
+        if template_exists:
+            mock_path_exists.return_value = True
+        else:
+            mock_path_exists.side_effect = lambda p: (
+                False if p == self.TEMPLATE_PATH else True)
+        if rescue:
+            self.NAME = 'disk.rescue'
+        mock_get_disk_size.return_value = units.Gi
+        self.sio_driver.create_volume.return_value = mock.sentinel.sio_id
+        self.sio_driver.map_volume.return_value = mock.sentinel.sio_path
+        fetch_func = mock.Mock()
+        sio_name = sio_utils.get_sio_volume_name(self.INSTANCE, self.NAME)
+        requested_size = None if rescue else self.SIZE
+        self.INSTANCE.flavor.extra_specs = {'foo': 'bar'}
+        expected_extra_specs = dict(self.INSTANCE.flavor.extra_specs)
+        if rescue:
+            expected_extra_specs['disk:provisioning_type'] = 'thin'
+
+        disk = self.image_class(self.INSTANCE, self.NAME)
+        disk.cache(fetch_func, self.TEMPLATE, size=requested_size,
+                   image_id=mock.sentinel.image_id)
+
+        if template_exists:
+            self.assertFalse(fetch_func.called)
+        else:
+            fetch_func.assert_called_once_with(
+                target=self.TEMPLATE_PATH, image_id=mock.sentinel.image_id)
+        self.sio_driver.get_volume_id.assert_called_once_with(
+            sio_name, none_if_not_found=True)
+        mock_get_disk_size.assert_called_once_with(self.TEMPLATE_PATH)
+        self.sio_driver.create_volume.assert_called_once_with(
+            sio_name, self.SIZE, extra_specs=expected_extra_specs)
+        self.sio_driver.map_volume.assert_called_once_with(
+            mock.sentinel.sio_id)
+        self.sio_driver.import_image.assert_called_once_with(
+            self.TEMPLATE_PATH, mock.sentinel.sio_path)
+        if rescue:
+            self.assertTrue({'foo': 'bar'}, self.INSTANCE.flavor.extra_specs)
+        self.assertEqual(mock.sentinel.sio_id, disk.sio_id)
+        self.assertEqual(mock.sentinel.sio_path, disk.path)
+
+    def test_cache_root(self):
+        self._test_cache_root(template_exists=True)
+
+    def test_cache_root_no_template(self):
+        self._test_cache_root(template_exists=False)
+
+    def test_cache_root_rescue(self):
+        self._test_cache_root(rescue=True)
+
+    def test_cache_root_invalid_size(self):
+        self.SIZE = units.Gi
+        self.assertRaises(exception.NovaException, self._test_cache_root)
+
+    @mock.patch('os.path.exists', return_value=True)
+    def test_cache_ephemeral(self, mock_path_exists):
+        self.sio_driver.get_volume_id.return_value = None
+        self.sio_driver.create_volume.return_value = mock.sentinel.sio_id
+        self.sio_driver.map_volume.return_value = mock.sentinel.sio_path
+        fetch_func = mock.Mock()
+        sio_name = sio_utils.get_sio_volume_name(self.INSTANCE, self.NAME)
+        self.INSTANCE.flavor.extra_specs = {'foo': 'bar'}
+
+        disk = self.image_class(self.INSTANCE, self.NAME)
+        disk.cache(fetch_func, self.TEMPLATE, size=self.SIZE,
+                   fetch_func_arg='fake')
+
+        fetch_func.assert_called_once_with(
+            target=mock.sentinel.sio_path, is_block_dev=True,
+            fetch_func_arg='fake')
+        self.sio_driver.get_volume_id.assert_called_once_with(
+            sio_name, none_if_not_found=True)
+        self.sio_driver.create_volume.assert_called_once_with(
+            sio_name, self.SIZE, extra_specs={'foo': 'bar'})
+        self.assertEqual(mock.sentinel.sio_id, disk.sio_id)
+        self.assertEqual(mock.sentinel.sio_path, disk.path)
+
+    def test_cache_ephemeral_invalid_size(self):
+        self.SIZE = units.Gi
+        self.assertRaises(exception.NovaException, self.test_cache_ephemeral)
+
+    @mock.patch('os.path.exists', return_value=True)
+    def test_cache_resize(self, mock_path_exists):
+        self.sio_driver.get_volume_size.return_value = self.SIZE
+        disk = self.image_class(self.INSTANCE, self.NAME)
+
+        disk.cache(mock.Mock(), self.TEMPLATE_PATH, self.SIZE * 2)
+
+        self.sio_driver.extend_volume.assert_called_once_with(
+            mock.sentinel.sio_id, self.SIZE * 2)
+
+    def test_cache_resize_invalid_size(self):
+        self.SIZE = units.Gi
+        self.assertRaises(exception.NovaException, self.test_cache_resize)
+
+    def test_connect_disk(self):
+        disk = self.image_class(self.INSTANCE, self.NAME)
+
+        disk.connect_disk()
+
+        self.sio_driver.map_volume.assert_called_once_with(
+            mock.sentinel.sio_id, with_no_wait=True)
+
+    def test_connect_disk_another_flavor(self):
+        self.INSTANCE.flavor.extra_specs = {'foo': 'bar'}
+        self.INSTANCE.task_state = task_states.RESIZE_FINISH
+        self.INSTANCE.old_flavor = objects.Flavor(extra_specs={'bar': 'foo'})
+        disk = self.image_class(self.INSTANCE, self.NAME)
+        sio_name = sio_utils.get_sio_volume_name(self.INSTANCE, self.NAME)
+
+        disk.connect_disk()
+
+        self.sio_driver.map_volume.assert_called_once_with(
+            mock.sentinel.sio_id, with_no_wait=True)
+        self.sio_driver.move_volume.assert_called_once_with(
+            mock.sentinel.sio_id, sio_name, {'foo': 'bar'}, {'bar': 'foo'},
+            is_mapped=True)
+
+    def test_get_model(self):
+        disk = self.image_class(self.INSTANCE, self.NAME)
+        model = disk.get_model(FakeConn())
+        self.assertIsInstance(model, imgmodel.SIOImage)
+
+    def test_snapshot_extract(self):
+        disk = self.image_class(
+            self.INSTANCE,
+            path='/dev/disk/by-id/emc-vol-101884a5027f35c3-bf733bc400000001')
+
+        disk.snapshot_extract('target_path', 'out_format')
+
+        self.sio_driver.export_image.assert_called_once_with(
+            '/dev/disk/by-id/emc-vol-101884a5027f35c3-bf733bc400000001',
+            'target_path', 'out_format')
+        self.assertEqual('bf733bc400000001', disk.sio_id)
+
+    def test_create_snap(self):
+        disk = self.image_class(self.INSTANCE, self.NAME)
+        sio_name = sio_utils.get_sio_volume_name(self.INSTANCE, self.NAME)
+        snap_name = sio_utils.get_sio_snapshot_name(sio_name, 'nova-resize')
+
+        disk.create_snap('nova-resize')
+
+        self.sio_driver.snapshot_volume.assert_called_once_with(
+            mock.sentinel.sio_id, snap_name)
+
+    def test_remove_snap(self):
+        disk = self.image_class(self.INSTANCE, self.NAME)
+        sio_name = sio_utils.get_sio_volume_name(self.INSTANCE, self.NAME)
+        snap_name = sio_utils.get_sio_snapshot_name(sio_name, 'nova-resize')
+
+        disk.remove_snap('nova-resize')
+
+        self.sio_driver.remove_volume_by_name.assert_called_once_with(
+            snap_name)
+
+    def test_rollback_to_snap(self):
+        disk = self.image_class(self.INSTANCE, self.NAME)
+        sio_name = sio_utils.get_sio_volume_name(self.INSTANCE, self.NAME)
+        snap_name = sio_utils.get_sio_snapshot_name(sio_name, 'nova-resize')
+
+        disk.rollback_to_snap('nova-resize')
+
+        self.sio_driver.rollback_to_snapshot.assert_called_once_with(
+            mock.sentinel.sio_id, sio_name, snap_name)
 
 
 class BackendTestCase(test.NoDBTestCase):
